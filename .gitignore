@@ -1,0 +1,91 @@
+# Minimal GitHub sync policy:
+# ignore everything first, then explicitly allow source/config files.
+*
+!*/
+
+# Repository metadata and docs
+!.gitignore
+!AGENTS.md
+!README.md
+
+# Frontend source and config
+!index.html
+!package.json
+!package-lock.json
+!tsconfig.json
+!tsconfig.node.json
+!vite.config.ts
+!src/
+!src/**
+!public/
+!public/inchspace-icon.svg
+
+# Tauri / Rust source and config
+!src-tauri/
+!src-tauri/.gitignore
+!src-tauri/Cargo.toml
+!src-tauri/Cargo.lock
+!src-tauri/build.rs
+!src-tauri/tauri.conf.json
+!src-tauri/capabilities/
+!src-tauri/capabilities/**
+!src-tauri/src/
+!src-tauri/src/**
+
+# Helper scripts
+!scripts/
+!scripts/generate-icons.mjs
+!scripts/refresh-macos-icon-cache.sh
+
+# Generated assets
+src/assets/*.png
+public/*.png
+src-tauri/icons/
+src-tauri/gen/
+
+# Dependencies and build output
+node_modules/
+dist/
+dist-ssr/
+coverage/
+target/
+src-tauri/target/
+
+# Logs and reports
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+playwright-report/
+test-results/
+
+# Local environment
+.env
+.env.*
+!.env.example
+*.local
+
+# Package manager caches
+.npm/
+.pnpm-store/
+.yarn/
+
+# Editor and OS files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/

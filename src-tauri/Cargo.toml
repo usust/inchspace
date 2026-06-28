@@ -25,6 +25,8 @@ tauri-plugin-dialog = "2"
 plist = "1"
 base64 = "0.22"
 png = "0.17"
+
+[target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
   "Win32_UI_Controls",
   "Win32_UI_Shell",

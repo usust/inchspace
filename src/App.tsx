@@ -4,11 +4,11 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   AppWindow,
+  CircleFadingPlus,
   Folder,
   Languages,
   LayoutGrid,
   PanelLeft,
-  Plus,
   Rocket,
   Settings2,
   X,
@@ -26,11 +26,21 @@ import {
 import "./App.css";
 
 const appLanguages = ["zh", "en"] as const;
+const mainWindowLabel = "main";
+const floatingBallWindowLabel = "floating-ball";
+const floatingBallDragThreshold = 6;
 
 type AppLanguage = (typeof appLanguages)[number];
 type LanguagePreference = "system" | AppLanguage;
 type MenuId = "dock" | "settings";
 type DockContentTabId = "programs" | "directories";
+type TauriInternals = {
+  metadata?: {
+    currentWindow?: {
+      label?: string;
+    };
+  };
+};
 
 type MenuItem = {
   id: MenuId;
@@ -426,6 +436,22 @@ function isAppLanguage(value: string | null): value is AppLanguage {
 
 function isLanguagePreference(value: string | null): value is LanguagePreference {
   return value === "system" || isAppLanguage(value);
+}
+
+function getCurrentWindowLabel(): string {
+  return (
+    (globalThis as typeof globalThis & { __TAURI_INTERNALS__?: TauriInternals })
+      .__TAURI_INTERNALS__?.metadata?.currentWindow?.label ?? mainWindowLabel
+  );
+}
+
+function syncDocumentWindowLabel(windowLabel: string): void {
+  if (typeof document === "undefined") {
+    return;
+  }
+
+  document.documentElement.dataset.window =
+    windowLabel === floatingBallWindowLabel ? floatingBallWindowLabel : mainWindowLabel;
 }
 
 function getStoredLanguagePreference(): LanguagePreference {
@@ -1929,7 +1955,85 @@ function getInitialLaunchState(): InitialLaunchState {
   };
 }
 
-function App() {
+function FloatingBallApp() {
+  const currentWindowRef = useRef(getCurrentWindow());
+  const suppressClickRef = useRef(false);
+  const [isActivating, setIsActivating] = useState(false);
+
+  useEffect(() => {
+    document.documentElement.lang = "zh-CN";
+  }, []);
+
+  function handlePointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (event.button !== 0) {
+      return;
+    }
+
+    const startX = event.screenX;
+    const startY = event.screenY;
+    suppressClickRef.current = false;
+
+    const cleanup = () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", cleanup);
+      window.removeEventListener("pointercancel", cleanup);
+    };
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      if (
+        Math.hypot(moveEvent.screenX - startX, moveEvent.screenY - startY) <
+        floatingBallDragThreshold
+      ) {
+        return;
+      }
+
+      suppressClickRef.current = true;
+      cleanup();
+      void currentWindowRef.current.startDragging().catch(() => undefined);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", cleanup);
+    window.addEventListener("pointercancel", cleanup);
+  }
+
+  async function handleActivateMainWindow() {
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false;
+      return;
+    }
+
+    setIsActivating(true);
+
+    try {
+      await invoke("activate_main_window");
+    } catch {
+      return;
+    } finally {
+      window.setTimeout(() => setIsActivating(false), 180);
+    }
+  }
+
+  return (
+    <main className="floating-ball-shell">
+      <button
+        className={["floating-ball-trigger", isActivating ? "activating" : ""]
+          .filter(Boolean)
+          .join(" ")}
+        type="button"
+        title="显示方寸 InchSpace"
+        aria-label="显示方寸 InchSpace"
+        onPointerDown={handlePointerDown}
+        onClick={() => void handleActivateMainWindow()}
+      >
+        <span className="floating-ball-halo" aria-hidden="true" />
+        <img src="/inchspace-icon.svg" alt="" draggable={false} />
+      </button>
+    </main>
+  );
+}
+
+function MainApp() {
   const [initialLaunchState] = useState<InitialLaunchState>(getInitialLaunchState);
   const [activeMenu, setActiveMenu] = useState<MenuId>("dock");
   const [activeDockTab, setActiveDockTab] = useState<DockContentTabId>("programs");
@@ -4606,6 +4710,7 @@ function App() {
 
             <button
               className="floating-add-button"
+              aria-label={activeDockTab === "programs" ? localizedCopy.addApp : localizedCopy.addDirectory}
               title={activeDockTab === "programs" ? localizedCopy.addApp : localizedCopy.addDirectory}
               type="button"
               onClick={() =>
@@ -4614,7 +4719,12 @@ function App() {
                   : void handlePickDirectory()
               }
             >
-              <Plus size={22} strokeWidth={2.5} />
+              <CircleFadingPlus
+                className="floating-add-icon"
+                size={26}
+                strokeWidth={2.15}
+                aria-hidden="true"
+              />
             </button>
 
             {draggedLaunchItem && launchDragState && launchDragState.showDropShadow && (
@@ -4842,6 +4952,18 @@ function App() {
       </section>
     </main>
   );
+}
+
+function App() {
+  const currentWindowLabel = getCurrentWindowLabel();
+
+  syncDocumentWindowLabel(currentWindowLabel);
+
+  useEffect(() => {
+    syncDocumentWindowLabel(currentWindowLabel);
+  }, [currentWindowLabel]);
+
+  return currentWindowLabel === floatingBallWindowLabel ? <FloatingBallApp /> : <MainApp />;
 }
 
 export default App;

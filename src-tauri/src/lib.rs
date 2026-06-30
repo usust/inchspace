@@ -10,6 +10,8 @@ use serde::Serialize;
 use std::{
     path::{Path, PathBuf},
     process::Command,
+    thread,
+    time::Duration,
 };
 use tauri::{
     menu::{AboutMetadata, MenuBuilder, SubmenuBuilder},
@@ -38,6 +40,10 @@ use windows::{
 };
 
 const APP_NAME: &str = "方寸 InchSpace";
+const MAIN_WINDOW_LABEL: &str = "main";
+const FLOATING_BALL_WINDOW_LABEL: &str = "floating-ball";
+const FLOATING_BALL_SIZE: f64 = 72.0;
+const FLOATING_BALL_MARGIN: f64 = 22.0;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -177,6 +183,32 @@ fn open_directory(directory_path: String) -> Result<(), String> {
     let directory_path = PathBuf::from(directory_path);
 
     platform_open_directory(&directory_path)
+}
+
+#[tauri::command]
+fn activate_main_window(app: tauri::AppHandle) -> Result<(), String> {
+    let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
+        return Err("Main window is not available".into());
+    };
+
+    let _ = window.set_visible_on_all_workspaces(true);
+    let _ = window.unminimize();
+    window
+        .show()
+        .map_err(|_| "Unable to show main window".to_owned())?;
+    let _ = window.set_always_on_top(true);
+    window
+        .set_focus()
+        .map_err(|_| "Unable to focus main window".to_owned())?;
+
+    let raised_window = window.clone();
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(320));
+        let _ = raised_window.set_always_on_top(false);
+        let _ = raised_window.set_visible_on_all_workspaces(false);
+    });
+
+    Ok(())
 }
 
 fn ensure_directory_path(directory_path: &Path) -> Result<(), String> {
@@ -753,13 +785,13 @@ fn install_menu(app: &mut tauri::App) -> tauri::Result<()> {
 fn handle_menu_event(app: &tauri::AppHandle, id: &str) {
     match id {
         "close_window" => {
-            if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
                 let _ = window.close();
             }
         }
         "quit_app" => app.exit(0),
         "toggle_fullscreen" => {
-            if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
                 if let Ok(is_fullscreen) = window.is_fullscreen() {
                     let _ = window.set_fullscreen(!is_fullscreen);
                 }
@@ -769,10 +801,69 @@ fn handle_menu_event(app: &tauri::AppHandle, id: &str) {
     }
 }
 
+fn floating_ball_initial_position(app: &tauri::App) -> (f64, f64) {
+    let monitor = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .and_then(|window| window.current_monitor().ok().flatten())
+        .or_else(|| app.primary_monitor().ok().flatten());
+
+    let Some(monitor) = monitor else {
+        return (24.0, 240.0);
+    };
+
+    let scale_factor = monitor.scale_factor().max(1.0);
+    let work_area = monitor.work_area();
+    let work_area_left = f64::from(work_area.position.x);
+    let work_area_top = f64::from(work_area.position.y);
+    let work_area_width = f64::from(work_area.size.width);
+    let work_area_height = f64::from(work_area.size.height);
+    let ball_size = FLOATING_BALL_SIZE * scale_factor;
+    let margin = FLOATING_BALL_MARGIN * scale_factor;
+    let x = (work_area_left + work_area_width - ball_size - margin) / scale_factor;
+    let y = (work_area_top + (work_area_height - ball_size).max(0.0) / 2.0) / scale_factor;
+
+    (x, y)
+}
+
+fn install_floating_ball(app: &tauri::App) -> tauri::Result<()> {
+    if app.get_webview_window(FLOATING_BALL_WINDOW_LABEL).is_some() {
+        return Ok(());
+    }
+
+    let (x, y) = floating_ball_initial_position(app);
+
+    tauri::WebviewWindowBuilder::new(
+        app,
+        FLOATING_BALL_WINDOW_LABEL,
+        tauri::WebviewUrl::App("index.html".into()),
+    )
+    .title("方寸悬浮球")
+    .inner_size(FLOATING_BALL_SIZE, FLOATING_BALL_SIZE)
+    .min_inner_size(FLOATING_BALL_SIZE, FLOATING_BALL_SIZE)
+    .max_inner_size(FLOATING_BALL_SIZE, FLOATING_BALL_SIZE)
+    .position(x, y)
+    .decorations(false)
+    .resizable(false)
+    .maximizable(false)
+    .minimizable(false)
+    .closable(false)
+    .always_on_top(true)
+    .visible_on_all_workspaces(true)
+    .skip_taskbar(true)
+    .focused(false)
+    .transparent(true)
+    .shadow(false)
+    .accept_first_mouse(true)
+    .build()?;
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
+            activate_main_window,
             application_picker_options,
             inspect_application,
             launch_application,
@@ -781,6 +872,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             install_menu(app)?;
+            install_floating_ball(app)?;
             app.on_menu_event(|app_handle, event| {
                 handle_menu_event(app_handle, event.id().as_ref());
             });

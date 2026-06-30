@@ -40,8 +40,8 @@ await sharp({
 
 await copyFile(sourcePng, publicPng);
 
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-execFileSync(npm, ["run", "tauri", "--", "icon", sourcePng], {
+const tauriCli = resolve(root, "node_modules/@tauri-apps/cli/tauri.js");
+execFileSync(process.execPath, [tauriCli, "icon", sourcePng], {
   cwd: root,
   stdio: "inherit",
 });

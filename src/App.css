@@ -332,11 +332,51 @@ button:focus-visible {
   transform: translateY(-0.5px);
 }
 
+.network-speed-direction svg {
+  display: none;
+}
+
 .network-speed-value {
   min-width: 0;
   overflow: hidden;
   text-align: center;
   white-space: nowrap;
+}
+
+html[data-platform="windows"] .network-speed-row {
+  grid-template-columns: 11px minmax(0, 1fr) 10px;
+  width: 55px;
+  height: 13px;
+}
+
+html[data-platform="windows"] .network-speed-direction {
+  display: grid;
+  width: 11px;
+  height: 12px;
+  place-items: center;
+  font-size: 0;
+}
+
+html[data-platform="windows"] .network-speed-direction-text {
+  display: none;
+}
+
+html[data-platform="windows"] .network-speed-direction svg {
+  display: block;
+  width: 10px;
+  height: 10px;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7px;
+}
+
+html[data-platform="windows"] .network-speed-value {
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
 }
 
 .network-speed-unit {

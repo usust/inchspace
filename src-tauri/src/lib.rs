@@ -8,7 +8,6 @@ use objc2_app_kit::{
 };
 #[cfg(target_os = "macos")]
 use objc2_foundation::{NSDictionary, NSSize, NSString};
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::fs;
 #[cfg(target_os = "windows")]
 use std::os::windows::ffi::OsStrExt;
@@ -615,8 +614,8 @@ fn system_metrics(
 }
 
 #[tauri::command]
-fn request_orderly_shutdown() -> Result<(), String> {
-    platform_request_orderly_shutdown()
+fn request_force_shutdown() -> Result<(), String> {
+    platform_request_force_shutdown()
 }
 
 #[tauri::command]
@@ -662,92 +661,35 @@ fn spawn_detached(mut command: Command, error_message: &str) -> Result<(), Strin
 }
 
 #[cfg(target_os = "macos")]
-fn platform_request_orderly_shutdown() -> Result<(), String> {
-    let script = r#"
-set protectedAppNames to {"Finder", "方寸 InchSpace", "InchSpace", "inchspace"}
-tell application "System Events"
-  set appNames to name of every application process whose background only is false
-end tell
-repeat with appName in appNames
-  set appNameText to appName as text
-  if protectedAppNames does not contain appNameText then
-    try
-      ignoring application responses
-        tell application appNameText to quit
-      end ignoring
-    end try
-    delay 0.45
-  end if
-end repeat
-delay 1.2
-tell application "System Events"
-  set appProcessIds to unix id of every application process whose background only is false and name is not "Finder" and name is not "方寸 InchSpace" and name is not "InchSpace" and name is not "inchspace"
-end tell
-repeat with appProcessId in appProcessIds
-  try
-    do shell script "/bin/kill -TERM " & (appProcessId as integer)
-  end try
-end repeat
-delay 1
-tell application "System Events"
-  set appProcessIds to unix id of every application process whose background only is false and name is not "Finder" and name is not "方寸 InchSpace" and name is not "InchSpace" and name is not "inchspace"
-end tell
-repeat with appProcessId in appProcessIds
-  try
-    do shell script "/bin/kill -KILL " & (appProcessId as integer)
-  end try
-end repeat
-delay 0.4
-tell application "System Events" to shut down
-"#;
+fn platform_request_force_shutdown() -> Result<(), String> {
     let mut command = Command::new("/usr/bin/osascript");
-    command.arg("-e").arg(script);
+    command
+        .arg("-e")
+        .arg(r#"tell application "System Events" to shut down"#);
 
     spawn_detached(command, "Unable to request shutdown")
 }
 
 #[cfg(target_os = "windows")]
-fn platform_request_orderly_shutdown() -> Result<(), String> {
-    let current_pid = std::process::id();
-    let script = format!(
-        r#"
-$excludePid = {current_pid}
-$excludedNames = @("explorer", "ApplicationFrameHost")
-Get-Process | Where-Object {{
-  $_.MainWindowHandle -ne 0 -and
-  $_.Id -ne $excludePid -and
-  $excludedNames -notcontains $_.ProcessName
-}} | Sort-Object ProcessName | ForEach-Object {{
-  try {{ [void]$_.CloseMainWindow() }} catch {{ }}
-  Start-Sleep -Milliseconds 450
-}}
-Start-Sleep -Seconds 2
-shutdown.exe /s /t 0 /f
-"#
-    );
-    let mut command = Command::new("powershell.exe");
-    command
-        .arg("-NoProfile")
-        .arg("-ExecutionPolicy")
-        .arg("Bypass")
-        .arg("-Command")
-        .arg(script);
+fn platform_request_force_shutdown() -> Result<(), String> {
+    let mut command = Command::new("shutdown.exe");
+    command.args(["/p", "/f"]);
 
     spawn_detached(command, "Unable to request shutdown")
 }
 
 #[cfg(target_os = "linux")]
-fn platform_request_orderly_shutdown() -> Result<(), String> {
+fn platform_request_force_shutdown() -> Result<(), String> {
     let mut command = Command::new("sh");
     command
         .arg("-c")
-        .arg("systemctl poweroff || loginctl poweroff || shutdown -h now");
+        .arg("systemctl poweroff --force || loginctl poweroff || shutdown -h now");
 
     spawn_detached(command, "Unable to request shutdown")
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-fn platform_request_orderly_shutdown() -> Result<(), String> {
+fn platform_request_force_shutdown() -> Result<(), String> {
     Err("Shutdown is not supported on this platform".into())
 }
 
@@ -1434,7 +1376,7 @@ fn install_floating_ball(app: &tauri::App) -> tauri::Result<()> {
 
     let (x, y) = floating_ball_initial_position(app);
 
-    tauri::WebviewWindowBuilder::new(
+    let window = tauri::WebviewWindowBuilder::new(
         app,
         FLOATING_BALL_WINDOW_LABEL,
         tauri::WebviewUrl::App("index.html".into()),
@@ -1459,6 +1401,9 @@ fn install_floating_ball(app: &tauri::App) -> tauri::Result<()> {
     .accept_first_mouse(true)
     .build()?;
 
+    #[cfg(target_os = "windows")]
+    window.remove_menu()?;
+
     Ok(())
 }
 
@@ -1473,7 +1418,7 @@ pub fn run() {
             inspect_directory,
             launch_application,
             open_directory,
-            request_orderly_shutdown,
+            request_force_shutdown,
             set_dock_icon_visible,
             system_metrics
         ])

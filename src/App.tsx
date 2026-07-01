@@ -46,6 +46,12 @@ type TauriInternals = {
     };
   };
 };
+type ClientPlatform = "linux" | "macos" | "other" | "windows";
+type NavigatorWithUserAgentData = Navigator & {
+  userAgentData?: {
+    platform?: string;
+  };
+};
 
 type SystemMetrics = {
   cpuUsage: number;
@@ -528,14 +534,14 @@ const copy = {
     openGroup: "打开分组",
     openDirectory: "打开目录",
     openDirectoryFailed: "打开目录失败，请检查目录是否存在",
-    orderlyShutdown: "退出应用并关机",
-    orderlyShutdownCancel: "取消",
-    orderlyShutdownConfirmMessage:
-      "确认后方寸会自动退出正在运行的应用并发起关机。为了避免阻塞关机，未保存的内容可能会被强制关闭，请先确认文件已保存。",
-    orderlyShutdownConfirmOk: "继续关机",
-    orderlyShutdownFailed: "关机请求失败，请稍后重试或使用系统菜单关机。",
-    orderlyShutdownStarting: "正在准备关机...",
-    orderlyShutdownTitle: "确认关机",
+    forceShutdown: "强制关机",
+    forceShutdownCancel: "取消",
+    forceShutdownConfirmMessage:
+      "确认后方寸会立即向系统发起强制关机请求，不再逐个退出应用。未保存的内容可能会丢失，请先确认文件已保存。",
+    forceShutdownConfirmOk: "立即关机",
+    forceShutdownFailed: "强制关机请求失败，请稍后重试或使用系统菜单关机。",
+    forceShutdownStarting: "正在发起强制关机...",
+    forceShutdownTitle: "确认强制关机",
     resizeGroup: "调整分组大小",
     selectApplication: "选择应用程序",
     selectDirectory: "选择目录",
@@ -576,14 +582,14 @@ const copy = {
     openGroup: "Open group",
     openDirectory: "Open folder",
     openDirectoryFailed: "Could not open this folder. Check that it still exists.",
-    orderlyShutdown: "Quit Apps and Shut Down",
-    orderlyShutdownCancel: "Cancel",
-    orderlyShutdownConfirmMessage:
-      "After confirmation, InchSpace will automatically quit running apps and request shutdown. Unsaved work may be forced closed to avoid blocking shutdown.",
-    orderlyShutdownConfirmOk: "Shut Down",
-    orderlyShutdownFailed: "Could not request shutdown. Try again or use the system menu.",
-    orderlyShutdownStarting: "Preparing shutdown...",
-    orderlyShutdownTitle: "Confirm Shutdown",
+    forceShutdown: "Force Shut Down",
+    forceShutdownCancel: "Cancel",
+    forceShutdownConfirmMessage:
+      "After confirmation, InchSpace will immediately request a forced system shutdown instead of quitting apps one by one. Unsaved work may be lost.",
+    forceShutdownConfirmOk: "Shut Down Now",
+    forceShutdownFailed: "Could not request forced shutdown. Try again or use the system menu.",
+    forceShutdownStarting: "Requesting forced shutdown...",
+    forceShutdownTitle: "Confirm Forced Shutdown",
     resizeGroup: "Resize group",
     selectApplication: "Choose Application",
     selectDirectory: "Choose Folder",
@@ -616,6 +622,43 @@ function syncDocumentWindowLabel(windowLabel: string): void {
 
   document.documentElement.dataset.window =
     windowLabel === floatingBallWindowLabel ? floatingBallWindowLabel : mainWindowLabel;
+}
+
+function getClientPlatform(): ClientPlatform {
+  if (typeof navigator === "undefined") {
+    return "other";
+  }
+
+  const navigatorWithUserAgentData = navigator as NavigatorWithUserAgentData;
+  const platformText = [
+    navigatorWithUserAgentData.userAgentData?.platform,
+    navigator.platform,
+    navigator.userAgent,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  if (/windows|win32|win64/i.test(platformText)) {
+    return "windows";
+  }
+
+  if (/mac|darwin/i.test(platformText)) {
+    return "macos";
+  }
+
+  if (/linux|x11/i.test(platformText)) {
+    return "linux";
+  }
+
+  return "other";
+}
+
+function syncDocumentPlatform(): void {
+  if (typeof document === "undefined") {
+    return;
+  }
+
+  document.documentElement.dataset.platform = getClientPlatform();
 }
 
 function getStoredLanguagePreference(): LanguagePreference {
@@ -2500,16 +2543,33 @@ function FloatingBallNetworkVisual({
       </svg>
       <span className="network-speed-stack">
         <span className="network-speed-row download">
-          <span className="network-speed-direction" aria-hidden="true">↓</span>
+          <NetworkDirectionIcon direction="down" />
           <span className="network-speed-value">{downloadSpeed.value}</span>
           <span className="network-speed-unit">{downloadSpeed.unit}</span>
         </span>
         <span className="network-speed-row upload">
-          <span className="network-speed-direction" aria-hidden="true">↑</span>
+          <NetworkDirectionIcon direction="up" />
           <span className="network-speed-value">{uploadSpeed.value}</span>
           <span className="network-speed-unit">{uploadSpeed.unit}</span>
         </span>
       </span>
+    </span>
+  );
+}
+
+function NetworkDirectionIcon({ direction }: { direction: "down" | "up" }) {
+  const path =
+    direction === "down"
+      ? "M6 1.5v7M2.9 5.7 6 8.8l3.1-3.1"
+      : "M6 10.5v-7M2.9 6.3 6 3.2l3.1 3.1";
+  const textArrow = direction === "down" ? "↓" : "↑";
+
+  return (
+    <span className="network-speed-direction" aria-hidden="true">
+      <span className="network-speed-direction-text">{textArrow}</span>
+      <svg viewBox="0 0 12 12" focusable="false">
+        <path d={path} />
+      </svg>
     </span>
   );
 }
@@ -2728,7 +2788,7 @@ function MainApp() {
     useState<LaunchGroupSwipeState | null>(null);
   const [launchError, setLaunchError] = useState<string | null>(null);
   const [dockGridSettingsError, setDockGridSettingsError] = useState<string | null>(null);
-  const [isOrderlyShutdownPending, setIsOrderlyShutdownPending] = useState(false);
+  const [isForceShutdownPending, setIsForceShutdownPending] = useState(false);
   const [editingLaunchGroupName, setEditingLaunchGroupName] = useState<string | null>(null);
   const [launchGroupNameDraft, setLaunchGroupNameDraft] = useState("");
   const [openLaunchGroupName, setOpenLaunchGroupName] = useState<string | null>(null);
@@ -5649,8 +5709,8 @@ function MainApp() {
     }
   }
 
-  async function handleOrderlyShutdown() {
-    if (isOrderlyShutdownPending) {
+  async function handleForceShutdown() {
+    if (isForceShutdownPending) {
       return;
     }
 
@@ -5659,15 +5719,15 @@ function MainApp() {
     let confirmed = false;
 
     try {
-      confirmed = await confirmDialog(localizedCopy.orderlyShutdownConfirmMessage, {
-        cancelLabel: localizedCopy.orderlyShutdownCancel,
+      confirmed = await confirmDialog(localizedCopy.forceShutdownConfirmMessage, {
+        cancelLabel: localizedCopy.forceShutdownCancel,
         kind: "warning",
-        okLabel: localizedCopy.orderlyShutdownConfirmOk,
-        title: localizedCopy.orderlyShutdownTitle,
+        okLabel: localizedCopy.forceShutdownConfirmOk,
+        title: localizedCopy.forceShutdownTitle,
       });
     } catch (error) {
       console.error("Failed to open shutdown confirmation dialog", error);
-      setLaunchError(localizedCopy.orderlyShutdownFailed);
+      setLaunchError(localizedCopy.forceShutdownFailed);
       return;
     }
 
@@ -5675,15 +5735,15 @@ function MainApp() {
       return;
     }
 
-    setIsOrderlyShutdownPending(true);
+    setIsForceShutdownPending(true);
 
     try {
-      await invoke("request_orderly_shutdown");
-      window.setTimeout(() => setIsOrderlyShutdownPending(false), 15_000);
+      await invoke("request_force_shutdown");
+      window.setTimeout(() => setIsForceShutdownPending(false), 15_000);
     } catch (error) {
-      console.error("Failed to request orderly shutdown", error);
-      setIsOrderlyShutdownPending(false);
-      setLaunchError(localizedCopy.orderlyShutdownFailed);
+      console.error("Failed to request forced shutdown", error);
+      setIsForceShutdownPending(false);
+      setLaunchError(localizedCopy.forceShutdownFailed);
     }
   }
 
@@ -5752,15 +5812,15 @@ function MainApp() {
             <button
               className="shutdown-icon-button"
               type="button"
-              aria-label={localizedCopy.orderlyShutdown}
+              aria-label={localizedCopy.forceShutdown}
               title={
-                isOrderlyShutdownPending
-                  ? localizedCopy.orderlyShutdownStarting
-                  : localizedCopy.orderlyShutdown
+                isForceShutdownPending
+                  ? localizedCopy.forceShutdownStarting
+                  : localizedCopy.forceShutdown
               }
-              disabled={isOrderlyShutdownPending}
+              disabled={isForceShutdownPending}
               onPointerDown={(event) => event.stopPropagation()}
-              onClick={() => void handleOrderlyShutdown()}
+              onClick={() => void handleForceShutdown()}
             >
               <PowerOff size={19} strokeWidth={2.25} aria-hidden="true" />
             </button>
@@ -6156,9 +6216,11 @@ function App() {
   const currentWindowLabel = getCurrentWindowLabel();
 
   syncDocumentWindowLabel(currentWindowLabel);
+  syncDocumentPlatform();
 
   useEffect(() => {
     syncDocumentWindowLabel(currentWindowLabel);
+    syncDocumentPlatform();
   }, [currentWindowLabel]);
 
   return currentWindowLabel === floatingBallWindowLabel ? <FloatingBallApp /> : <MainApp />;

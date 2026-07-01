@@ -1,0 +1,139 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .earth-land {
+      animation: earth-land-drift 22s linear infinite;
+      transform-box: view-box;
+    }
+
+    .earth-clouds {
+      animation: earth-cloud-drift 34s linear infinite;
+      transform-box: view-box;
+    }
+
+    @keyframes earth-land-drift {
+      from {
+        transform: translateX(0);
+      }
+
+      to {
+        transform: translateX(-420px);
+      }
+    }
+
+    @keyframes earth-cloud-drift {
+      from {
+        transform: translateX(0);
+      }
+
+      to {
+        transform: translateX(-420px);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .earth-land,
+      .earth-clouds {
+        animation: none;
+      }
+    }
+  </style>
+
+  <defs>
+    <radialGradient id="ocean" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(170 130) rotate(48) scale(390)">
+      <stop stop-color="#BFF8FF"/>
+      <stop offset="0.38" stop-color="#34C7D7"/>
+      <stop offset="0.72" stop-color="#107EAF"/>
+      <stop offset="1" stop-color="#15476D"/>
+    </radialGradient>
+    <linearGradient id="land" x1="114" y1="118" x2="424" y2="380" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#E6F5A7"/>
+      <stop offset="0.45" stop-color="#6FD184"/>
+      <stop offset="1" stop-color="#178A63"/>
+    </linearGradient>
+    <linearGradient id="landShade" x1="140" y1="150" x2="394" y2="384" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#DDF2A0"/>
+      <stop offset="1" stop-color="#1D9469"/>
+    </linearGradient>
+    <linearGradient id="ice" x1="168" y1="64" x2="350" y2="438" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#C7F3FF"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="116" y1="84" x2="398" y2="426" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity="0.8"/>
+      <stop offset="0.54" stop-color="#FFFFFF" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#032C55" stop-opacity="0.38"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="144" y1="102" x2="318" y2="286" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF" stop-opacity="0.82"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="globeClip">
+      <circle cx="256" cy="256" r="198"/>
+    </clipPath>
+    <filter id="dropShadow" x="48" y="50" width="416" height="430" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="18" flood-color="#073A45" flood-opacity="0.2" stdDeviation="20"/>
+    </filter>
+  </defs>
+
+  <ellipse cx="256" cy="438" rx="150" ry="28" fill="#D8EEF3" opacity="0.62"/>
+
+  <g filter="url(#dropShadow)">
+    <circle cx="256" cy="256" r="198" fill="url(#ocean)"/>
+
+    <g clip-path="url(#globeClip)">
+      <rect x="58" y="58" width="396" height="396" fill="url(#ocean)"/>
+
+      <g class="earth-land">
+        <g>
+          <path d="M118 157C146 126 195 120 227 146C248 163 246 191 223 201C204 209 196 225 204 248C214 276 194 299 168 288C137 276 116 240 111 205C108 184 109 168 118 157Z" fill="url(#land)"/>
+          <path d="M211 274C237 263 265 277 276 306C287 337 275 374 247 390C229 400 212 390 213 367C214 343 198 335 178 323C160 312 162 291 183 284L211 274Z" fill="url(#landShade)"/>
+          <path d="M278 129C318 101 379 111 409 146C429 169 420 197 393 202C367 206 354 219 355 240C356 261 337 275 315 264C295 254 283 258 272 279C261 303 232 303 220 280C207 255 221 232 251 224C275 217 279 203 261 184C243 166 250 148 278 129Z" fill="url(#land)"/>
+          <path d="M340 283C374 272 417 294 426 330C433 358 411 374 383 365C359 357 345 365 337 389C329 414 296 415 284 393C273 372 285 351 308 344C330 337 335 322 321 303C312 291 322 287 340 283Z" fill="url(#landShade)"/>
+          <path d="M422 216C447 211 471 228 478 252C486 280 466 300 438 294C415 289 398 268 400 244C402 227 409 219 422 216Z" fill="url(#land)"/>
+          <path d="M103 329C120 319 149 324 162 343C175 362 166 384 145 389C119 395 94 374 92 348C91 339 94 333 103 329Z" fill="url(#landShade)"/>
+          <path d="M178 76C214 58 304 54 344 75C299 92 226 94 178 76Z" fill="url(#ice)" opacity="0.88"/>
+          <path d="M172 438C218 461 301 462 348 438C302 423 219 421 172 438Z" fill="url(#ice)" opacity="0.72"/>
+        </g>
+        <g transform="translate(420 0)">
+          <path d="M118 157C146 126 195 120 227 146C248 163 246 191 223 201C204 209 196 225 204 248C214 276 194 299 168 288C137 276 116 240 111 205C108 184 109 168 118 157Z" fill="url(#land)"/>
+          <path d="M211 274C237 263 265 277 276 306C287 337 275 374 247 390C229 400 212 390 213 367C214 343 198 335 178 323C160 312 162 291 183 284L211 274Z" fill="url(#landShade)"/>
+          <path d="M278 129C318 101 379 111 409 146C429 169 420 197 393 202C367 206 354 219 355 240C356 261 337 275 315 264C295 254 283 258 272 279C261 303 232 303 220 280C207 255 221 232 251 224C275 217 279 203 261 184C243 166 250 148 278 129Z" fill="url(#land)"/>
+          <path d="M340 283C374 272 417 294 426 330C433 358 411 374 383 365C359 357 345 365 337 389C329 414 296 415 284 393C273 372 285 351 308 344C330 337 335 322 321 303C312 291 322 287 340 283Z" fill="url(#landShade)"/>
+          <path d="M422 216C447 211 471 228 478 252C486 280 466 300 438 294C415 289 398 268 400 244C402 227 409 219 422 216Z" fill="url(#land)"/>
+          <path d="M103 329C120 319 149 324 162 343C175 362 166 384 145 389C119 395 94 374 92 348C91 339 94 333 103 329Z" fill="url(#landShade)"/>
+          <path d="M178 76C214 58 304 54 344 75C299 92 226 94 178 76Z" fill="url(#ice)" opacity="0.88"/>
+          <path d="M172 438C218 461 301 462 348 438C302 423 219 421 172 438Z" fill="url(#ice)" opacity="0.72"/>
+        </g>
+      </g>
+
+      <g class="earth-clouds" opacity="0.74">
+        <g>
+          <path d="M105 204C144 189 180 191 212 211" stroke="#FFFFFF" stroke-width="18" stroke-linecap="round"/>
+          <path d="M267 181C310 164 353 168 390 194" stroke="#FFFFFF" stroke-width="16" stroke-linecap="round"/>
+          <path d="M185 342C234 323 283 329 326 359" stroke="#FFFFFF" stroke-width="18" stroke-linecap="round"/>
+          <path d="M365 295C397 284 432 291 456 312" stroke="#FFFFFF" stroke-width="14" stroke-linecap="round"/>
+        </g>
+        <g transform="translate(420 0)">
+          <path d="M105 204C144 189 180 191 212 211" stroke="#FFFFFF" stroke-width="18" stroke-linecap="round"/>
+          <path d="M267 181C310 164 353 168 390 194" stroke="#FFFFFF" stroke-width="16" stroke-linecap="round"/>
+          <path d="M185 342C234 323 283 329 326 359" stroke="#FFFFFF" stroke-width="18" stroke-linecap="round"/>
+          <path d="M365 295C397 284 432 291 456 312" stroke="#FFFFFF" stroke-width="14" stroke-linecap="round"/>
+        </g>
+      </g>
+
+      <g opacity="0.22">
+        <path d="M58 256H454" stroke="#E7FCFF" stroke-width="8"/>
+        <path d="M81 176C178 206 334 206 431 176" stroke="#E7FCFF" stroke-width="6"/>
+        <path d="M81 336C178 306 334 306 431 336" stroke="#E7FCFF" stroke-width="6"/>
+        <ellipse cx="256" cy="256" rx="96" ry="198" stroke="#E7FCFF" stroke-width="7"/>
+        <ellipse cx="256" cy="256" rx="158" ry="198" stroke="#E7FCFF" stroke-width="5"/>
+      </g>
+
+      <path d="M256 58C365 58 454 147 454 256C454 340 402 411 329 440C371 389 395 325 395 256C395 187 371 123 329 72C402 101 454 172 454 256C454 147 365 58 256 58Z" fill="#063C62" opacity="0.14"/>
+      <path d="M89 176C123 100 210 65 291 80C226 90 169 127 136 181C113 220 104 266 112 311C82 269 73 219 89 176Z" fill="url(#shine)"/>
+    </g>
+
+    <circle cx="256" cy="256" r="198" stroke="url(#rim)" stroke-width="18"/>
+    <circle cx="256" cy="256" r="204" stroke="#FFFFFF" stroke-opacity="0.62" stroke-width="5"/>
+  </g>
+</svg>

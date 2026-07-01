@@ -25,6 +25,12 @@ tauri-plugin-dialog = "2"
 plist = "1"
 base64 = "0.22"
 png = "0.17"
+sysinfo = { version = "0.39.5", default-features = false, features = ["network", "system"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSBitmapImageRep", "NSImage", "NSImageRep", "NSWorkspace"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSDictionary", "NSGeometry", "NSObject", "NSString"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [

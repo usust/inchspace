@@ -1,14 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import { LogicalSize } from "@tauri-apps/api/dpi";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { confirm as confirmDialog, open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   AppWindow,
   CircleFadingPlus,
+  Dock,
   Folder,
   Languages,
   LayoutGrid,
   PanelLeft,
+  PowerOff,
   Rocket,
   Settings2,
   X,
@@ -23,14 +25,17 @@ import {
   useRef,
   useState,
 } from "react";
+import floatingBallAvatarUrl from "./assets/inchspace-floating-avatar.svg";
 import "./App.css";
 
 const appLanguages = ["zh", "en"] as const;
+const floatingBallStyles = ["rotatingGlobe", "networkSpeed", "systemPressure"] as const;
 const mainWindowLabel = "main";
 const floatingBallWindowLabel = "floating-ball";
 const floatingBallDragThreshold = 6;
 
 type AppLanguage = (typeof appLanguages)[number];
+type FloatingBallStyle = (typeof floatingBallStyles)[number];
 type LanguagePreference = "system" | AppLanguage;
 type MenuId = "dock" | "settings";
 type DockContentTabId = "programs" | "directories";
@@ -40,6 +45,15 @@ type TauriInternals = {
       label?: string;
     };
   };
+};
+
+type SystemMetrics = {
+  cpuUsage: number;
+  downloadBytesPerSecond: number;
+  memoryTotalBytes: number;
+  memoryUsage: number;
+  memoryUsedBytes: number;
+  uploadBytesPerSecond: number;
 };
 
 type MenuItem = {
@@ -68,6 +82,8 @@ type DirectoryItem = {
   id: string;
   name: string;
   path: string;
+  comparisonPath?: string;
+  iconDataUrl?: string;
   position?: LaunchPosition;
   sortOrder?: number;
   createdAt: number;
@@ -81,6 +97,14 @@ type LaunchPosition = {
 type ApplicationInfo = {
   name: string;
   path: string;
+  iconDataUrl?: string | null;
+};
+
+type DirectoryInfo = {
+  name: string;
+  path: string;
+  comparisonPath: string;
+  containingAppDirectoryPath?: string | null;
   iconDataUrl?: string | null;
 };
 
@@ -128,6 +152,17 @@ type LaunchRootEntry =
       kind: "group";
     };
 
+type LaunchRootInsertionTarget =
+  | {
+      index: number;
+      kind: "index";
+    }
+  | {
+      entryId: string;
+      insertAfter: boolean;
+      kind: "entry";
+    };
+
 type ResolvedRootEntryPositions = {
   groups: Map<string, LaunchPosition>;
   items: Map<string, LaunchPosition>;
@@ -150,7 +185,10 @@ type LaunchDragState = {
   dropY: number;
   insertAfterTarget: boolean;
   itemId: string;
+  rootDropAction: LaunchRootDropAction | null;
+  rootInsertIndex: number | null;
   showDropShadow: boolean;
+  targetAction: "insert" | "merge";
   targetGroup: string | null;
   targetId: string | null;
   x: number;
@@ -207,8 +245,12 @@ type DirectoryDragSession = {
   startY: number;
 };
 
+type LaunchRootDropAction = "insert" | "position";
+
 type LaunchDropIntent = {
   insertAfterTarget: boolean;
+  rootDropAction?: LaunchRootDropAction;
+  targetAction: "insert" | "merge";
   targetGroup: string | null;
   targetId: string | null;
 };
@@ -276,6 +318,8 @@ const launchGroupNamesStorageKey = "inchspace.launchGroupNames";
 const launchItemsStorageKey = "inchspace.launchItems";
 const directoryItemsStorageKey = "inchspace.directoryItems";
 const dockGridSettingsStorageKey = "inchspace.dockGridSettings";
+const dockIconVisibleStorageKey = "inchspace.dockIconVisible";
+const floatingBallStyleStorageKey = "inchspace.floatingBallStyle";
 const languageStorageKey = "inchspace.languagePreference";
 const launchEditLongPressMs = 520;
 const dockTabsReservedHeight = 82;
@@ -357,6 +401,96 @@ const availableLanguages: Array<{ value: AppLanguage; label: string; htmlLang: s
   { value: "en", label: "English", htmlLang: "en" },
 ];
 
+const defaultFloatingBallStyle: FloatingBallStyle = "rotatingGlobe";
+const floatingBallMetricsRefreshMs = 1000;
+const floatingBallMetricsHistoryLimit = 28;
+const defaultSystemMetrics: SystemMetrics = {
+  cpuUsage: 0,
+  downloadBytesPerSecond: 0,
+  memoryTotalBytes: 0,
+  memoryUsage: 0,
+  memoryUsedBytes: 0,
+  uploadBytesPerSecond: 0,
+};
+const previewMetricsHistory: SystemMetrics[] = [
+  {
+    ...defaultSystemMetrics,
+    cpuUsage: 24,
+    downloadBytesPerSecond: 32_000,
+    memoryUsage: 42,
+    uploadBytesPerSecond: 4_000,
+  },
+  {
+    ...defaultSystemMetrics,
+    cpuUsage: 38,
+    downloadBytesPerSecond: 180_000,
+    memoryUsage: 44,
+    uploadBytesPerSecond: 92_000,
+  },
+  {
+    ...defaultSystemMetrics,
+    cpuUsage: 44,
+    downloadBytesPerSecond: 54_000,
+    memoryUsage: 49,
+    uploadBytesPerSecond: 18_000,
+  },
+  {
+    ...defaultSystemMetrics,
+    cpuUsage: 62,
+    downloadBytesPerSecond: 8_400_000,
+    memoryUsage: 57,
+    uploadBytesPerSecond: 38_000,
+  },
+  {
+    ...defaultSystemMetrics,
+    cpuUsage: 54,
+    downloadBytesPerSecond: 92_000,
+    memoryUsage: 62,
+    uploadBytesPerSecond: 12_000,
+  },
+  {
+    ...defaultSystemMetrics,
+    cpuUsage: 48,
+    downloadBytesPerSecond: 2_600_000,
+    memoryUsage: 59,
+    uploadBytesPerSecond: 360_000,
+  },
+  {
+    ...defaultSystemMetrics,
+    cpuUsage: 36,
+    downloadBytesPerSecond: 124_000,
+    memoryUsage: 55,
+    uploadBytesPerSecond: 26_000,
+  },
+];
+
+const floatingBallStyleOptions: Array<{
+  label: Record<AppLanguage, string>;
+  value: FloatingBallStyle;
+}> = [
+  {
+    value: "rotatingGlobe",
+    label: {
+      zh: "旋转地球",
+      en: "Rotating Globe",
+    },
+  },
+  {
+    value: "networkSpeed",
+    label: {
+      zh: "网络速率",
+      en: "Network Speed",
+    },
+  },
+  {
+    value: "systemPressure",
+    label: {
+      zh: "系统压力",
+      en: "System Pressure",
+    },
+  },
+];
+
 const copy = {
   zh: {
     addDirectory: "添加目录",
@@ -378,6 +512,11 @@ const copy = {
     launchFailed: "启动失败，请检查应用",
     languageSetting: "应用语言",
     languageSelector: "选择应用语言",
+    dockIconVisibilitySetting: "Dock 图标",
+    dockIconVisibilityToggle: "在 Dock 栏显示方寸图标",
+    dockIconVisible: "显示",
+    dockIconHidden: "隐藏",
+    floatingBallStyleSetting: "悬浮球样式",
     dockLayoutSetting: "Dock 布局",
     dockColumns: "列数",
     dockRows: "行数",
@@ -389,6 +528,14 @@ const copy = {
     openGroup: "打开分组",
     openDirectory: "打开目录",
     openDirectoryFailed: "打开目录失败，请检查目录是否存在",
+    orderlyShutdown: "退出应用并关机",
+    orderlyShutdownCancel: "取消",
+    orderlyShutdownConfirmMessage:
+      "确认后方寸会自动退出正在运行的应用并发起关机。为了避免阻塞关机，未保存的内容可能会被强制关闭，请先确认文件已保存。",
+    orderlyShutdownConfirmOk: "继续关机",
+    orderlyShutdownFailed: "关机请求失败，请稍后重试或使用系统菜单关机。",
+    orderlyShutdownStarting: "正在准备关机...",
+    orderlyShutdownTitle: "确认关机",
     resizeGroup: "调整分组大小",
     selectApplication: "选择应用程序",
     selectDirectory: "选择目录",
@@ -413,6 +560,11 @@ const copy = {
     launchFailed: "Launch failed. Check the application.",
     languageSetting: "App language",
     languageSelector: "Choose app language",
+    dockIconVisibilitySetting: "Dock icon",
+    dockIconVisibilityToggle: "Show InchSpace in the Dock",
+    dockIconVisible: "Shown",
+    dockIconHidden: "Hidden",
+    floatingBallStyleSetting: "Floating ball style",
     dockLayoutSetting: "Dock layout",
     dockColumns: "Columns",
     dockRows: "Rows",
@@ -424,6 +576,14 @@ const copy = {
     openGroup: "Open group",
     openDirectory: "Open folder",
     openDirectoryFailed: "Could not open this folder. Check that it still exists.",
+    orderlyShutdown: "Quit Apps and Shut Down",
+    orderlyShutdownCancel: "Cancel",
+    orderlyShutdownConfirmMessage:
+      "After confirmation, InchSpace will automatically quit running apps and request shutdown. Unsaved work may be forced closed to avoid blocking shutdown.",
+    orderlyShutdownConfirmOk: "Shut Down",
+    orderlyShutdownFailed: "Could not request shutdown. Try again or use the system menu.",
+    orderlyShutdownStarting: "Preparing shutdown...",
+    orderlyShutdownTitle: "Confirm Shutdown",
     resizeGroup: "Resize group",
     selectApplication: "Choose Application",
     selectDirectory: "Choose Folder",
@@ -436,6 +596,10 @@ function isAppLanguage(value: string | null): value is AppLanguage {
 
 function isLanguagePreference(value: string | null): value is LanguagePreference {
   return value === "system" || isAppLanguage(value);
+}
+
+function isFloatingBallStyle(value: string | null): value is FloatingBallStyle {
+  return floatingBallStyles.includes(value as FloatingBallStyle);
 }
 
 function getCurrentWindowLabel(): string {
@@ -463,6 +627,23 @@ function getStoredLanguagePreference(): LanguagePreference {
   }
 }
 
+function getStoredFloatingBallStyle(): FloatingBallStyle {
+  try {
+    const storedStyle = window.localStorage.getItem(floatingBallStyleStorageKey);
+    return isFloatingBallStyle(storedStyle) ? storedStyle : defaultFloatingBallStyle;
+  } catch {
+    return defaultFloatingBallStyle;
+  }
+}
+
+function getStoredDockIconVisible(): boolean {
+  try {
+    return window.localStorage.getItem(dockIconVisibleStorageKey) !== "false";
+  } catch {
+    return true;
+  }
+}
+
 function createId(prefix: string): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return `${prefix}-${crypto.randomUUID()}`;
@@ -481,6 +662,110 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
 
 function clampInteger(value: number, min: number, max: number): number {
   return Math.min(Math.max(Math.round(value), min), max);
+}
+
+function isMetricFloatingBallStyle(style: FloatingBallStyle): boolean {
+  return style === "networkSpeed" || style === "systemPressure";
+}
+
+function normalizeMetricNumber(value: unknown, fallback = 0): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function normalizeSystemMetrics(value: unknown): SystemMetrics {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return defaultSystemMetrics;
+  }
+
+  const metrics = value as Partial<SystemMetrics>;
+
+  return {
+    cpuUsage: clampNumber(metrics.cpuUsage, 0, 100, defaultSystemMetrics.cpuUsage),
+    downloadBytesPerSecond: Math.max(
+      normalizeMetricNumber(metrics.downloadBytesPerSecond),
+      0,
+    ),
+    memoryTotalBytes: Math.max(Math.round(normalizeMetricNumber(metrics.memoryTotalBytes)), 0),
+    memoryUsage: clampNumber(metrics.memoryUsage, 0, 100, defaultSystemMetrics.memoryUsage),
+    memoryUsedBytes: Math.max(Math.round(normalizeMetricNumber(metrics.memoryUsedBytes)), 0),
+    uploadBytesPerSecond: Math.max(
+      normalizeMetricNumber(metrics.uploadBytesPerSecond),
+      0,
+    ),
+  };
+}
+
+function getLatestSystemMetrics(metricsHistory: SystemMetrics[]): SystemMetrics {
+  return metricsHistory[metricsHistory.length - 1] ?? defaultSystemMetrics;
+}
+
+function getDirectionalSparklinePoints(
+  values: number[],
+  width: number,
+  baseline: number,
+  amplitude: number,
+  direction: "down" | "up",
+  scaleMax: number,
+): string {
+  if (values.length === 0) {
+    return "";
+  }
+
+  const maxValue = Math.max(scaleMax, 1);
+  const lastIndex = Math.max(values.length - 1, 1);
+
+  return values
+    .map((value, index) => {
+      const x = (index / lastIndex) * width;
+      const offset = (Math.max(value, 0) / maxValue) * amplitude;
+      const y = direction === "up" ? baseline - offset : baseline + offset;
+
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(" ");
+}
+
+function getDirectionalSparklineAreaPoints(
+  values: number[],
+  width: number,
+  baseline: number,
+  amplitude: number,
+  direction: "down" | "up",
+  scaleMax: number,
+): string {
+  const linePoints = getDirectionalSparklinePoints(
+    values,
+    width,
+    baseline,
+    amplitude,
+    direction,
+    scaleMax,
+  );
+
+  return linePoints ? `0,${baseline} ${linePoints} ${width},${baseline}` : "";
+}
+
+function getBytesPerSecondDisplay(value: number): { unit: string; value: string } {
+  const safeValue = Math.max(value, 0);
+
+  if (safeValue >= 1024 * 1024) {
+    return {
+      unit: "M",
+      value: `${Math.round(safeValue / 1024 / 1024)}`,
+    };
+  }
+
+  if (safeValue >= 1024) {
+    return {
+      unit: "K",
+      value: `${Math.round(safeValue / 1024)}`,
+    };
+  }
+
+  return {
+    unit: "B",
+    value: `${Math.round(safeValue)}`,
+  };
 }
 
 function normalizeDockGridSettings(value: unknown): DockGridSettings {
@@ -817,11 +1102,18 @@ function getPathDisplayName(path: string): string {
 }
 
 function normalizeComparablePath(path: string): string {
-  return path.trim().replace(/[\\/]+$/, "");
+  return path.trim().replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
-function isSameDirectoryPath(first: string, second: string): boolean {
-  return normalizeComparablePath(first) === normalizeComparablePath(second);
+function getDirectoryComparisonPath(item: { comparisonPath?: string | null; path: string }): string {
+  return normalizeComparablePath(item.comparisonPath?.trim() || item.path);
+}
+
+function isSameDirectoryItem(
+  first: { comparisonPath?: string | null; path: string },
+  second: { comparisonPath?: string | null; path: string },
+): boolean {
+  return getDirectoryComparisonPath(first) === getDirectoryComparisonPath(second);
 }
 
 function normalizeDirectoryItems(value: unknown): DirectoryItem[] {
@@ -847,6 +1139,16 @@ function normalizeDirectoryItems(value: unknown): DirectoryItem[] {
         id: (item as DirectoryItem).id,
         name,
         path: (item as DirectoryItem).path,
+        comparisonPath:
+          typeof (item as DirectoryItem).comparisonPath === "string" &&
+          (item as DirectoryItem).comparisonPath?.trim()
+            ? (item as DirectoryItem).comparisonPath
+            : undefined,
+        iconDataUrl:
+          typeof (item as DirectoryItem).iconDataUrl === "string" &&
+          (item as DirectoryItem).iconDataUrl?.trim()
+            ? (item as DirectoryItem).iconDataUrl
+            : undefined,
         createdAt:
           typeof (item as DirectoryItem).createdAt === "number"
             ? (item as DirectoryItem).createdAt
@@ -902,7 +1204,7 @@ function getPngDataUrlSize(dataUrl: string): { height: number; width: number } |
   }
 }
 
-function shouldRefreshLaunchIcon(iconDataUrl?: string): boolean {
+function shouldRefreshIconDataUrl(iconDataUrl?: string): boolean {
   if (!iconDataUrl?.trim()) {
     return true;
   }
@@ -910,6 +1212,14 @@ function shouldRefreshLaunchIcon(iconDataUrl?: string): boolean {
   const pngSize = getPngDataUrlSize(iconDataUrl);
 
   return !pngSize || Math.max(pngSize.width, pngSize.height) < 128;
+}
+
+function shouldRefreshDirectoryMetadata(item: DirectoryItem): boolean {
+  return (
+    !item.comparisonPath?.trim() ||
+    item.path.includes("/Library/Mobile Documents/") ||
+    shouldRefreshIconDataUrl(item.iconDataUrl)
+  );
 }
 
 function normalizeGroupLayouts(value: unknown): Record<string, LaunchGroupLayout> {
@@ -1083,6 +1393,122 @@ function getRootLaunchPositionKey(
   const coordinates = getRootLaunchGridCoordinates(position, dockGridSettings);
 
   return `${coordinates.column}:${coordinates.row}`;
+}
+
+function getRootLaunchGridIndex(
+  position: LaunchPosition,
+  dockGridSettings: DockGridSettings,
+): number {
+  const coordinates = getRootLaunchGridCoordinates(position, dockGridSettings);
+
+  return coordinates.row * dockGridSettings.columns + coordinates.column;
+}
+
+function getRootEntryPreferredPosition(
+  entry: LaunchRootEntry,
+  fallbackIndex: number,
+  dockGridSettings: DockGridSettings,
+  groupLayouts: Record<string, LaunchGroupLayout>,
+): LaunchPosition {
+  if (entry.kind === "item") {
+    return getRootLaunchItemPosition(entry.item, fallbackIndex, dockGridSettings);
+  }
+
+  const layoutPosition = groupLayouts[entry.group.name]?.position;
+
+  return layoutPosition
+    ? snapRootLaunchPosition(layoutPosition, dockGridSettings)
+    : getFallbackRootLaunchPosition(fallbackIndex, dockGridSettings);
+}
+
+function getRootEntriesInGridOrder(
+  entries: LaunchRootEntry[],
+  dockGridSettings: DockGridSettings,
+  groupLayouts: Record<string, LaunchGroupLayout>,
+): LaunchRootEntry[] {
+  return entries
+    .map((entry, index) => {
+      const position = getRootEntryPreferredPosition(
+        entry,
+        index,
+        dockGridSettings,
+        groupLayouts,
+      );
+
+      return {
+        entry,
+        gridIndex: getRootLaunchGridIndex(position, dockGridSettings),
+        index,
+        position,
+      };
+    })
+    .sort(
+      (first, second) =>
+        first.gridIndex - second.gridIndex ||
+        first.position.y - second.position.y ||
+        first.position.x - second.position.x ||
+        first.index - second.index,
+    )
+    .map(({ entry }) => entry);
+}
+
+function getRootEntriesWithInsertedItem(
+  entries: LaunchRootEntry[],
+  movingItem: LaunchItem,
+  target: LaunchRootInsertionTarget,
+  dockGridSettings: DockGridSettings,
+  groupLayouts: Record<string, LaunchGroupLayout>,
+): LaunchRootEntry[] | null {
+  const orderedEntries = getRootEntriesInGridOrder(entries, dockGridSettings, groupLayouts);
+  const entriesWithoutMovingItem = orderedEntries.filter(
+    (entry) => !(entry.kind === "item" && entry.item.id === movingItem.id),
+  );
+  const insertIndex =
+    target.kind === "entry"
+      ? entriesWithoutMovingItem.findIndex((entry) => entry.id === target.entryId) +
+        (target.insertAfter ? 1 : 0)
+      : target.index;
+
+  if (target.kind === "entry" && insertIndex < (target.insertAfter ? 1 : 0)) {
+    return null;
+  }
+
+  const clampedInsertIndex = clampInteger(insertIndex, 0, entriesWithoutMovingItem.length);
+  const nextEntries = [
+    ...entriesWithoutMovingItem.slice(0, clampedInsertIndex),
+    {
+      id: movingItem.id,
+      item: movingItem,
+      kind: "item" as const,
+    },
+    ...entriesWithoutMovingItem.slice(clampedInsertIndex),
+  ];
+
+  return nextEntries.length <= getRootLaunchGridCapacity(dockGridSettings) ? nextEntries : null;
+}
+
+function getRootEntryPositionsFromOrder(
+  entries: LaunchRootEntry[],
+  dockGridSettings: DockGridSettings,
+): ResolvedRootEntryPositions {
+  const groups = new Map<string, LaunchPosition>();
+  const items = new Map<string, LaunchPosition>();
+
+  entries.forEach((entry, index) => {
+    const position = getFallbackRootLaunchPosition(index, dockGridSettings);
+
+    if (entry.kind === "item") {
+      items.set(entry.item.id, position);
+      return;
+    }
+
+    groups.set(entry.group.name, position);
+  });
+
+  return {
+    groups,
+    items,
+  };
 }
 
 function getNearestAvailableRootLaunchPosition(
@@ -1386,6 +1812,18 @@ function getLaunchRootZoneBelowPoint(x: number, y: number): HTMLElement | null {
       .map((element) => element.closest<HTMLElement>("[data-launch-root-zone]"))
       .find(Boolean) ?? null
   );
+}
+
+function isPointOutsideOpenLaunchGroupPanel(x: number, y: number): boolean {
+  const openPanel = document.querySelector<HTMLElement>(".launch-group.open-panel");
+
+  if (!openPanel) {
+    return false;
+  }
+
+  const panelRect = openPanel.getBoundingClientRect();
+
+  return x < panelRect.left || x > panelRect.right || y < panelRect.top || y > panelRect.bottom;
 }
 
 function snapRootLaunchPosition(
@@ -1955,14 +2393,243 @@ function getInitialLaunchState(): InitialLaunchState {
   };
 }
 
+function FloatingBallVisual({
+  floatingBallStyle,
+  isPreview = false,
+  metricsHistory,
+}: {
+  floatingBallStyle: FloatingBallStyle;
+  isPreview?: boolean;
+  metricsHistory: SystemMetrics[];
+}) {
+  switch (floatingBallStyle) {
+    case "networkSpeed":
+      return (
+        <FloatingBallNetworkVisual
+          isPreview={isPreview}
+          metricsHistory={metricsHistory}
+        />
+      );
+    case "systemPressure":
+      return (
+        <FloatingBallSystemVisual
+          isPreview={isPreview}
+          metricsHistory={metricsHistory}
+        />
+      );
+    case "rotatingGlobe":
+      return (
+        <img
+          className="floating-ball-avatar"
+          src={floatingBallAvatarUrl}
+          alt=""
+          draggable={false}
+        />
+      );
+  }
+}
+
+function FloatingBallNetworkVisual({
+  isPreview = false,
+  metricsHistory,
+}: {
+  isPreview?: boolean;
+  metricsHistory: SystemMetrics[];
+}) {
+  const displayHistory = metricsHistory.length > 1 ? metricsHistory : previewMetricsHistory;
+  const currentMetrics = getLatestSystemMetrics(displayHistory);
+  const downloadValues = displayHistory.map((metrics) => metrics.downloadBytesPerSecond);
+  const uploadValues = displayHistory.map((metrics) => metrics.uploadBytesPerSecond);
+  const chartScaleMax = Math.max(...downloadValues, ...uploadValues, 1);
+  const totalSpeed = currentMetrics.downloadBytesPerSecond + currentMetrics.uploadBytesPerSecond;
+  const downloadSpeed = getBytesPerSecondDisplay(currentMetrics.downloadBytesPerSecond);
+  const uploadSpeed = getBytesPerSecondDisplay(currentMetrics.uploadBytesPerSecond);
+  const peakSpeed = Math.max(
+    ...displayHistory.map(
+      (metrics) => metrics.downloadBytesPerSecond + metrics.uploadBytesPerSecond,
+    ),
+    1,
+  );
+  const networkLoad = clampNumber(totalSpeed / peakSpeed, 0.12, 1, 0.12);
+  const networkGlowOpacity = 0.16 + networkLoad * 0.28;
+  const networkPulseOpacity = 0.32 + networkLoad * 0.34;
+
+  return (
+    <span
+      className={[
+        "floating-ball-meter",
+        "floating-ball-network",
+        isPreview ? "preview" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      style={
+        {
+          "--network-glow-opacity": networkGlowOpacity,
+          "--network-load": networkLoad,
+          "--network-pulse-opacity": networkPulseOpacity,
+        } as CSSProperties
+      }
+    >
+      <span className="network-pulse" />
+      <svg
+        className="network-history-chart"
+        viewBox="0 0 56 56"
+        aria-hidden="true"
+        focusable="false"
+      >
+        <line className="network-axis edge" x1="0" y1="8" x2="56" y2="8" />
+        <line className="network-axis middle" x1="0" y1="28" x2="56" y2="28" />
+        <line className="network-axis edge" x1="0" y1="48" x2="56" y2="48" />
+        <polygon
+          className="network-history-fill download"
+          points={getDirectionalSparklineAreaPoints(downloadValues, 56, 28, 19, "up", chartScaleMax)}
+        />
+        <polygon
+          className="network-history-fill upload"
+          points={getDirectionalSparklineAreaPoints(uploadValues, 56, 28, 19, "down", chartScaleMax)}
+        />
+        <polyline
+          className="network-history-line download"
+          points={getDirectionalSparklinePoints(downloadValues, 56, 28, 19, "up", chartScaleMax)}
+        />
+        <polyline
+          className="network-history-line upload"
+          points={getDirectionalSparklinePoints(uploadValues, 56, 28, 19, "down", chartScaleMax)}
+        />
+      </svg>
+      <span className="network-speed-stack">
+        <span className="network-speed-row download">
+          <span className="network-speed-direction" aria-hidden="true">↓</span>
+          <span className="network-speed-value">{downloadSpeed.value}</span>
+          <span className="network-speed-unit">{downloadSpeed.unit}</span>
+        </span>
+        <span className="network-speed-row upload">
+          <span className="network-speed-direction" aria-hidden="true">↑</span>
+          <span className="network-speed-value">{uploadSpeed.value}</span>
+          <span className="network-speed-unit">{uploadSpeed.unit}</span>
+        </span>
+      </span>
+    </span>
+  );
+}
+
+function FloatingBallSystemVisual({
+  isPreview = false,
+  metricsHistory,
+}: {
+  isPreview?: boolean;
+  metricsHistory: SystemMetrics[];
+}) {
+  const displayHistory = metricsHistory.length > 0 ? metricsHistory : previewMetricsHistory;
+  const currentMetrics = getLatestSystemMetrics(displayHistory);
+  const cpuUsage = clampNumber(currentMetrics.cpuUsage, 0, 100, 0);
+  const memoryUsage = clampNumber(currentMetrics.memoryUsage, 0, 100, 0);
+  const pressure = Math.max(cpuUsage, memoryUsage);
+
+  return (
+    <span
+      className={[
+        "floating-ball-meter",
+        "floating-ball-system",
+        isPreview ? "preview" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+      style={
+        {
+          "--cpu-bar-width": `${cpuUsage}%`,
+          "--cpu-usage": cpuUsage,
+          "--memory-bar-width": `${memoryUsage}%`,
+          "--memory-usage": memoryUsage,
+          "--pressure": pressure,
+        } as CSSProperties
+      }
+    >
+      <svg
+        className="system-pressure-rings"
+        viewBox="0 0 64 64"
+        aria-hidden="true"
+        focusable="false"
+      >
+        <circle className="system-ring-track outer" cx="32" cy="32" r="25" />
+        <circle className="system-ring-track inner" cx="32" cy="32" r="19" />
+        <circle className="system-ring cpu" cx="32" cy="32" r="25" pathLength="100" />
+        <circle className="system-ring memory" cx="32" cy="32" r="19" pathLength="100" />
+      </svg>
+      <span className="system-pressure-center">
+        <span>{Math.round(pressure)}</span>
+        <span>%</span>
+      </span>
+      <span className="system-pressure-bars" aria-hidden="true">
+        <span className="cpu" />
+        <span className="memory" />
+      </span>
+    </span>
+  );
+}
+
 function FloatingBallApp() {
   const currentWindowRef = useRef(getCurrentWindow());
   const suppressClickRef = useRef(false);
   const [isActivating, setIsActivating] = useState(false);
+  const [floatingBallStyle, setFloatingBallStyle] = useState<FloatingBallStyle>(
+    getStoredFloatingBallStyle,
+  );
+  const [metricsHistory, setMetricsHistory] = useState<SystemMetrics[]>([]);
 
   useEffect(() => {
     document.documentElement.lang = "zh-CN";
   }, []);
+
+  useEffect(() => {
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== floatingBallStyleStorageKey) {
+        return;
+      }
+
+      setFloatingBallStyle(
+        isFloatingBallStyle(event.newValue) ? event.newValue : defaultFloatingBallStyle,
+      );
+    };
+
+    window.addEventListener("storage", handleStorage);
+
+    return () => window.removeEventListener("storage", handleStorage);
+  }, []);
+
+  useEffect(() => {
+    if (!isMetricFloatingBallStyle(floatingBallStyle)) {
+      return;
+    }
+
+    let isCancelled = false;
+
+    const updateMetrics = async () => {
+      try {
+        const nextMetrics = normalizeSystemMetrics(await invoke("system_metrics"));
+
+        if (isCancelled) {
+          return;
+        }
+
+        setMetricsHistory((history) => [
+          ...history.slice(-(floatingBallMetricsHistoryLimit - 1)),
+          nextMetrics,
+        ]);
+      } catch {
+        return;
+      }
+    };
+
+    void updateMetrics();
+    const intervalId = window.setInterval(updateMetrics, floatingBallMetricsRefreshMs);
+
+    return () => {
+      isCancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [floatingBallStyle]);
 
   function handlePointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
     if (event.button !== 0) {
@@ -2026,8 +2693,10 @@ function FloatingBallApp() {
         onPointerDown={handlePointerDown}
         onClick={() => void handleActivateMainWindow()}
       >
-        <span className="floating-ball-halo" aria-hidden="true" />
-        <img src="/inchspace-icon.svg" alt="" draggable={false} />
+        <FloatingBallVisual
+          floatingBallStyle={floatingBallStyle}
+          metricsHistory={metricsHistory}
+        />
       </button>
     </main>
   );
@@ -2040,6 +2709,10 @@ function MainApp() {
   const [systemLanguage, setSystemLanguage] = useState<AppLanguage>(getSystemLanguage);
   const [languagePreference, setLanguagePreference] =
     useState<LanguagePreference>(getStoredLanguagePreference);
+  const [floatingBallStyle, setFloatingBallStyle] = useState<FloatingBallStyle>(
+    getStoredFloatingBallStyle,
+  );
+  const [dockIconVisible, setDockIconVisible] = useState(getStoredDockIconVisible);
   const [dockGridSettings, setDockGridSettings] = useState<DockGridSettings>(
     initialLaunchState.dockGridSettings,
   );
@@ -2055,6 +2728,7 @@ function MainApp() {
     useState<LaunchGroupSwipeState | null>(null);
   const [launchError, setLaunchError] = useState<string | null>(null);
   const [dockGridSettingsError, setDockGridSettingsError] = useState<string | null>(null);
+  const [isOrderlyShutdownPending, setIsOrderlyShutdownPending] = useState(false);
   const [editingLaunchGroupName, setEditingLaunchGroupName] = useState<string | null>(null);
   const [launchGroupNameDraft, setLaunchGroupNameDraft] = useState("");
   const [openLaunchGroupName, setOpenLaunchGroupName] = useState<string | null>(null);
@@ -2063,6 +2737,7 @@ function MainApp() {
     useState<LaunchGroupDragState | null>(null);
   const [directoryDragState, setDirectoryDragState] = useState<DirectoryDragState | null>(null);
   const [isLaunchEditMode, setIsLaunchEditMode] = useState(false);
+  const launchEditModeRef = useRef(false);
   const launchDragSessionRef = useRef<LaunchDragSession | null>(null);
   const launchGroupDragSessionRef = useRef<LaunchGroupDragSession | null>(null);
   const directoryDragSessionRef = useRef<DirectoryDragSession | null>(null);
@@ -2074,6 +2749,7 @@ function MainApp() {
   const launchGroupNameInputRef = useRef<HTMLInputElement | null>(null);
   const launchRootRef = useRef<HTMLDivElement | null>(null);
   const launchIconRefreshAttemptedPathsRef = useRef<Set<string>>(new Set());
+  const directoryIconRefreshAttemptedPathsRef = useRef<Set<string>>(new Set());
   const suppressLaunchItemIdRef = useRef<string | null>(null);
   const suppressLaunchGroupNameRef = useRef<string | null>(null);
   const suppressDirectoryItemIdRef = useRef<string | null>(null);
@@ -2154,7 +2830,55 @@ function MainApp() {
     ],
     [launchGroups, rootLaunchItems],
   );
+  const previewRootLaunchEntries = useMemo<LaunchRootEntry[]>(() => {
+    const targetGroup = launchDragState?.targetGroup
+      ? getLaunchGroupKey(launchDragState.targetGroup)
+      : null;
+
+    if (
+      !launchDragState ||
+      !draggedLaunchItem ||
+      targetGroup !== rootLaunchGroup ||
+      launchDragState.targetAction !== "insert" ||
+      launchDragState.rootDropAction === "position"
+    ) {
+      return rootLaunchEntries;
+    }
+
+    const target: LaunchRootInsertionTarget | null = launchDragState.targetId
+      ? {
+          entryId: launchDragState.targetId,
+          insertAfter: launchDragState.insertAfterTarget,
+          kind: "entry",
+        }
+      : launchDragState.rootInsertIndex !== null
+        ? {
+            index: launchDragState.rootInsertIndex,
+            kind: "index",
+          }
+        : null;
+
+    return target
+      ? getRootEntriesWithInsertedItem(
+          rootLaunchEntries,
+          draggedLaunchItem,
+          target,
+          dockGridSettings,
+          launchGroupLayouts,
+        ) ?? rootLaunchEntries
+      : rootLaunchEntries;
+  }, [
+    dockGridSettings,
+    draggedLaunchItem,
+    launchDragState,
+    launchGroupLayouts,
+    rootLaunchEntries,
+  ]);
   const resolvedRootEntryPositions = useMemo<ResolvedRootEntryPositions>(() => {
+    if (previewRootLaunchEntries !== rootLaunchEntries) {
+      return getRootEntryPositionsFromOrder(previewRootLaunchEntries, dockGridSettings);
+    }
+
     const occupiedPositions = new Set<string>();
     const items = new Map<string, LaunchPosition>();
     const groups = new Map<string, LaunchPosition>();
@@ -2187,7 +2911,7 @@ function MainApp() {
       groups,
       items,
     };
-  }, [dockGridSettings, launchGroupLayouts, rootLaunchEntries]);
+  }, [dockGridSettings, launchGroupLayouts, previewRootLaunchEntries, rootLaunchEntries]);
   const resolvedDirectoryPositions = useMemo(() => {
     const occupiedPositions = new Set<string>();
     const positions = new Map<string, LaunchPosition>();
@@ -2211,7 +2935,7 @@ function MainApp() {
   }, [dockGridSettings, sortedDirectoryItems]);
   const rootLaunchEntryRects = useMemo(
     () =>
-      rootLaunchEntries.flatMap((entry) => {
+      previewRootLaunchEntries.flatMap((entry) => {
         const position =
           entry.kind === "item"
             ? resolvedRootEntryPositions.items.get(entry.item.id)
@@ -2221,7 +2945,7 @@ function MainApp() {
           ? [createLaunchRectFromPosition(position, launchGroupMetrics.cellWidth, launchGroupMetrics.cellHeight)]
           : [];
       }),
-    [resolvedRootEntryPositions, rootLaunchEntries],
+    [previewRootLaunchEntries, resolvedRootEntryPositions],
   );
   const previewLaunchGroupDescriptors = useMemo(
     () =>
@@ -2296,6 +3020,11 @@ function MainApp() {
       return nextNames;
     });
     cancelEditingLaunchGroupName();
+  }
+
+  function setLaunchEditMode(isEditing: boolean) {
+    launchEditModeRef.current = isEditing;
+    setIsLaunchEditMode(isEditing);
   }
 
   function getRootLaunchPosition(item: LaunchItem, index: number): LaunchPosition {
@@ -2693,6 +3422,102 @@ function MainApp() {
       preferredPosition,
       dockGridSettings,
     );
+  }
+
+  function moveLaunchItemToRootByInsertion(
+    itemId: string,
+    target: LaunchRootInsertionTarget,
+  ): boolean {
+    const movingItem = launchItems.find((item) => item.id === itemId);
+
+    if (!movingItem) {
+      return false;
+    }
+
+    const nextEntries = getRootEntriesWithInsertedItem(
+      rootLaunchEntries,
+      movingItem,
+      target,
+      dockGridSettings,
+      launchGroupLayouts,
+    );
+
+    if (!nextEntries) {
+      return false;
+    }
+
+    const nextPositions = getRootEntryPositionsFromOrder(nextEntries, dockGridSettings);
+    const itemSortOrders = new Map<string, number>();
+
+    nextEntries.forEach((entry, index) => {
+      if (entry.kind === "item") {
+        itemSortOrders.set(entry.item.id, index);
+      }
+    });
+
+    setLaunchItems((items) => {
+      let didChange = false;
+      const nextItems = items.map((item) => {
+        const position = nextPositions.items.get(item.id);
+        const isMovingItem = item.id === itemId;
+        const isRootItem = getLaunchGroupKey(item.group) === rootLaunchGroup;
+
+        if (!position || (!isMovingItem && !isRootItem)) {
+          return item;
+        }
+
+        const nextGroup = isMovingItem ? rootLaunchGroup : item.group;
+        const nextSortOrder = itemSortOrders.get(item.id);
+
+        if (
+          getLaunchGroupKey(nextGroup) === getLaunchGroupKey(item.group) &&
+          item.position?.x === position.x &&
+          item.position?.y === position.y &&
+          item.sortOrder === nextSortOrder
+        ) {
+          return item;
+        }
+
+        didChange = true;
+        return {
+          ...item,
+          group: nextGroup,
+          position,
+          sortOrder: nextSortOrder,
+        };
+      });
+
+      return didChange ? normalizeSingleItemLaunchGroups(nextItems, nextPositions.groups) : items;
+    });
+
+    setLaunchGroupLayouts((layouts) => {
+      const nextLayouts = { ...layouts };
+      let didChange = false;
+
+      nextPositions.groups.forEach((position, groupName) => {
+        const group = launchGroups.find((launchGroup) => launchGroup.name === groupName);
+        const layout = nextLayouts[groupName] ?? getAutoGroupLayout(group?.items.length ?? 2);
+
+        if (
+          layout.manualPosition &&
+          layout.position?.x === position.x &&
+          layout.position?.y === position.y
+        ) {
+          return;
+        }
+
+        nextLayouts[groupName] = {
+          ...layout,
+          manualPosition: true,
+          position,
+        };
+        didChange = true;
+      });
+
+      return didChange ? nextLayouts : layouts;
+    });
+
+    return true;
   }
 
   function getPreferredLaunchGroupRootPosition(
@@ -3119,6 +3944,20 @@ function MainApp() {
     y: number,
     previousIntent?: LaunchDropIntent | null,
   ): LaunchDropIntent | null {
+    const isEditingLaunch = launchEditModeRef.current;
+    const sourceItem = launchItems.find((launchItem) => launchItem.id === itemId);
+    const sourceGroup = sourceItem ? getLaunchGroupKey(sourceItem.group) : rootLaunchGroup;
+
+    if (sourceGroup !== rootLaunchGroup && isPointOutsideOpenLaunchGroupPanel(x, y)) {
+      return {
+        insertAfterTarget: true,
+        rootDropAction: isEditingLaunch ? "insert" : "position",
+        targetAction: "insert",
+        targetGroup: rootLaunchGroup,
+        targetId: null,
+      };
+    }
+
     const targetPlacement = getLaunchTargetPlacementFromPoint(itemId, x, y);
     const targetItem = targetPlacement
       ? launchItems.find((launchItem) => launchItem.id === targetPlacement.targetId)
@@ -3127,6 +3966,7 @@ function MainApp() {
     if (targetPlacement && targetItem) {
       return {
         ...targetPlacement,
+        targetAction: isEditingLaunch ? "insert" : "merge",
         targetGroup: getLaunchGroupKey(targetItem.group),
       };
     }
@@ -3142,6 +3982,7 @@ function MainApp() {
 
       if (
         previousIntent?.targetId &&
+        previousIntent.targetAction === "insert" &&
         previousTargetGroup === targetGroup &&
         isDragOverLaunchItemSlot(itemId, x, y)
       ) {
@@ -3150,6 +3991,7 @@ function MainApp() {
 
       return {
         insertAfterTarget: true,
+        targetAction: isEditingLaunch ? "insert" : "merge",
         targetGroup,
         targetId: null,
       };
@@ -3158,6 +4000,8 @@ function MainApp() {
     if (getLaunchRootZoneBelowPoint(x, y)) {
       return {
         insertAfterTarget: true,
+        rootDropAction: isEditingLaunch ? "insert" : "position",
+        targetAction: "insert",
         targetGroup: rootLaunchGroup,
         targetId: null,
       };
@@ -3244,7 +4088,7 @@ function MainApp() {
 
         activeSession.hasLongPressed = true;
         suppressNextLaunchItemClick(item.id);
-        setIsLaunchEditMode(true);
+        setLaunchEditMode(true);
         clearLaunchLongPressTimer();
       }, launchEditLongPressMs);
     }
@@ -3283,18 +4127,33 @@ function MainApp() {
         dockGridSettings,
         launchGroupsScale,
       );
+      const rootDropPosition = getRootLaunchPositionFromClient(
+        moveEvent.clientX,
+        moveEvent.clientY,
+        launchRootRef.current,
+        dockGridSettings,
+        launchGroupsScale,
+      );
       const previewPosition = getLaunchDragPreviewPosition(
         activeSession,
         moveEvent.clientX,
         moveEvent.clientY,
       );
+      const isRootEmptyDrop = dropIntent?.targetGroup === rootLaunchGroup && !dropIntent.targetId;
+      const rootDropAction = isRootEmptyDrop ? dropIntent.rootDropAction ?? "insert" : null;
 
       setLaunchDragState({
         dropX: dropPosition.x,
         dropY: dropPosition.y,
         insertAfterTarget: dropIntent?.insertAfterTarget ?? true,
         itemId: item.id,
-        showDropShadow: dropIntent?.targetGroup === rootLaunchGroup && !dropIntent.targetId,
+        rootDropAction,
+        rootInsertIndex:
+          isRootEmptyDrop && rootDropAction !== "position"
+            ? getRootLaunchGridIndex(rootDropPosition, dockGridSettings)
+            : null,
+        showDropShadow: isRootEmptyDrop,
+        targetAction: dropIntent?.targetAction ?? "insert",
         targetGroup: dropIntent?.targetGroup ?? null,
         targetId: dropIntent?.targetId ?? null,
         x: previewPosition.x,
@@ -3336,6 +4195,21 @@ function MainApp() {
       suppressNextLaunchItemClick(item.id);
 
       if (dropIntent?.targetId) {
+        const targetItem = launchItems.find((launchItem) => launchItem.id === dropIntent.targetId);
+
+        if (
+          targetItem &&
+          getLaunchGroupKey(targetItem.group) === rootLaunchGroup &&
+          dropIntent.targetAction === "insert" &&
+          moveLaunchItemToRootByInsertion(item.id, {
+            entryId: dropIntent.targetId,
+            insertAfter: dropIntent.insertAfterTarget,
+            kind: "entry",
+          })
+        ) {
+          return;
+        }
+
         mergeLaunchItems(
           item.id,
           dropIntent.targetId,
@@ -3351,31 +4225,30 @@ function MainApp() {
         return;
       }
 
-      if (dropGroupName === rootLaunchGroup && activeSession.sourceGroup !== dropGroupName) {
-        moveLaunchItemToRoot(
-          item.id,
-          getRootLaunchPositionFromClient(
-            upEvent.clientX,
-            upEvent.clientY,
-            launchRootRef.current,
-            dockGridSettings,
-            launchGroupsScale,
-          ),
+      if (dropGroupName === rootLaunchGroup) {
+        const rootPosition = getRootLaunchPositionFromClient(
+          upEvent.clientX,
+          upEvent.clientY,
+          launchRootRef.current,
+          dockGridSettings,
+          launchGroupsScale,
         );
-        return;
-      }
 
-      if (dropGroupName === rootLaunchGroup && activeSession.sourceGroup === rootLaunchGroup) {
-        moveLaunchItemToRoot(
-          item.id,
-          getRootLaunchPositionFromClient(
-            upEvent.clientX,
-            upEvent.clientY,
-            launchRootRef.current,
-            dockGridSettings,
-            launchGroupsScale,
-          ),
-        );
+        if (dropIntent?.rootDropAction === "position") {
+          moveLaunchItemToRoot(item.id, rootPosition);
+          return;
+        }
+
+        if (
+          moveLaunchItemToRootByInsertion(item.id, {
+            index: getRootLaunchGridIndex(rootPosition, dockGridSettings),
+            kind: "index",
+          })
+        ) {
+          return;
+        }
+
+        moveLaunchItemToRoot(item.id, rootPosition);
       }
     };
 
@@ -3418,7 +4291,7 @@ function MainApp() {
 
         activeSession.hasLongPressed = true;
         suppressNextDirectoryItemClick(item.id);
-        setIsLaunchEditMode(true);
+        setLaunchEditMode(true);
         clearLaunchLongPressTimer();
       }, launchEditLongPressMs);
     }
@@ -3543,7 +4416,7 @@ function MainApp() {
 
         activeSession.hasLongPressed = true;
         suppressNextLaunchGroupClick(group.name);
-        setIsLaunchEditMode(true);
+        setLaunchEditMode(true);
         clearLaunchLongPressTimer();
       }, launchEditLongPressMs);
     }
@@ -3658,7 +4531,7 @@ function MainApp() {
       return;
     }
 
-    setIsLaunchEditMode(false);
+    setLaunchEditMode(false);
   }
 
   function renderLaunchApp(
@@ -3667,7 +4540,8 @@ function MainApp() {
   ) {
     const [iconStart, iconEnd] = getIconPalette(item.name);
     const isDragging = launchDragState?.itemId === item.id;
-    const isDropTarget = launchDragState?.targetId === item.id;
+    const isDropTarget =
+      launchDragState?.targetId === item.id && launchDragState.targetAction === "merge";
 
     return (
       <div
@@ -3778,9 +4652,7 @@ function MainApp() {
           onDragStart={(event) => event.preventDefault()}
           onPointerDown={(event) => handleDirectoryItemPointerDown(item, event)}
         >
-          <span className="directory-icon" aria-hidden="true">
-            <Folder size={36} strokeWidth={1.75} />
-          </span>
+          {renderDirectoryIcon(item)}
           <span className="launch-app-name">{item.name}</span>
         </button>
 
@@ -3802,6 +4674,25 @@ function MainApp() {
           <X size={14} strokeWidth={2.6} />
         </button>
       </div>
+    );
+  }
+
+  function renderDirectoryIcon(item: DirectoryItem) {
+    const iconDataUrl = item.iconDataUrl?.trim();
+
+    return (
+      <span
+        className={["directory-icon", iconDataUrl ? "has-custom-icon" : ""]
+          .filter(Boolean)
+          .join(" ")}
+        aria-hidden="true"
+      >
+        {iconDataUrl ? (
+          <img src={iconDataUrl} alt="" draggable={false} />
+        ) : (
+          <Folder size={36} strokeWidth={1.75} />
+        )}
+      </span>
     );
   }
 
@@ -4057,7 +4948,7 @@ function MainApp() {
   useEffect(() => () => clearLaunchLongPressTimer(), []);
 
   useEffect(() => {
-    setIsLaunchEditMode(false);
+    setLaunchEditMode(false);
     setOpenLaunchGroupName(null);
     setLaunchDragState(null);
     setLaunchGroupDragState(null);
@@ -4274,6 +5165,24 @@ function MainApp() {
 
   useEffect(() => {
     try {
+      window.localStorage.setItem(floatingBallStyleStorageKey, floatingBallStyle);
+    } catch {
+      return;
+    }
+  }, [floatingBallStyle]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(dockIconVisibleStorageKey, String(dockIconVisible));
+    } catch {
+      return;
+    }
+
+    void invoke("set_dock_icon_visible", { visible: dockIconVisible }).catch(() => undefined);
+  }, [dockIconVisible]);
+
+  useEffect(() => {
+    try {
       window.localStorage.setItem(dockGridSettingsStorageKey, JSON.stringify(dockGridSettings));
     } catch {
       return;
@@ -4309,7 +5218,7 @@ function MainApp() {
 
   useEffect(() => {
     const itemsNeedingIconRefresh = launchItems.filter((item) => {
-      if (!shouldRefreshLaunchIcon(item.iconDataUrl)) {
+      if (!shouldRefreshIconDataUrl(item.iconDataUrl)) {
         return false;
       }
 
@@ -4370,6 +5279,98 @@ function MainApp() {
       isCancelled = true;
     };
   }, [launchItems]);
+
+  useEffect(() => {
+    const itemsNeedingIconRefresh = directoryItems.filter((item) => {
+      if (!shouldRefreshDirectoryMetadata(item)) {
+        return false;
+      }
+
+      if (directoryIconRefreshAttemptedPathsRef.current.has(item.path)) {
+        return false;
+      }
+
+      directoryIconRefreshAttemptedPathsRef.current.add(item.path);
+      return true;
+    });
+
+    if (itemsNeedingIconRefresh.length === 0) {
+      return;
+    }
+
+    let isCancelled = false;
+
+    async function refreshDirectoryIcons() {
+      const refreshedDirectories = await Promise.all(
+        itemsNeedingIconRefresh.map(async (item) => {
+          try {
+            const directoryInfo = await invoke<DirectoryInfo>("inspect_directory", {
+              directoryPath: item.path,
+            });
+            const iconDataUrl = directoryInfo.iconDataUrl?.trim();
+
+            return {
+              comparisonPath: directoryInfo.comparisonPath,
+              iconDataUrl: iconDataUrl || undefined,
+              id: item.id,
+              name: directoryInfo.name,
+              path: directoryInfo.path,
+            };
+          } catch {
+            return null;
+          }
+        }),
+      );
+
+      if (isCancelled) {
+        return;
+      }
+
+      const directoriesById = new Map(
+        refreshedDirectories
+          .filter(
+            (
+              directory,
+            ): directory is {
+              comparisonPath: string;
+              iconDataUrl: string | undefined;
+              id: string;
+              name: string;
+              path: string;
+            } => directory !== null,
+          )
+          .map((directory) => [directory.id, directory]),
+      );
+
+      if (directoriesById.size === 0) {
+        return;
+      }
+
+      setDirectoryItems((items) =>
+        items.map((item) => {
+          const directory = directoriesById.get(item.id);
+
+          if (!directory) {
+            return item;
+          }
+
+          return {
+            ...item,
+            comparisonPath: directory.comparisonPath,
+            iconDataUrl: directory.iconDataUrl ?? item.iconDataUrl,
+            name: directory.name.trim() || item.name,
+            path: directory.path,
+          };
+        }),
+      );
+    }
+
+    void refreshDirectoryIcons();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [directoryItems]);
 
   useEffect(() => {
     try {
@@ -4451,6 +5452,50 @@ function MainApp() {
     }
   }
 
+  async function resolveDirectoryInfoForAdd(selectedPath: string): Promise<DirectoryInfo> {
+    const selectedInfo = await invoke<DirectoryInfo>("inspect_directory", {
+      directoryPath: selectedPath,
+    });
+
+    if (
+      !directoryItems.some((item) => isSameDirectoryItem(item, selectedInfo)) ||
+      !selectedInfo.containingAppDirectoryPath?.trim()
+    ) {
+      return selectedInfo;
+    }
+
+    const containingAppInfo = await invoke<DirectoryInfo>("inspect_directory", {
+      directoryPath: selectedInfo.containingAppDirectoryPath,
+    });
+
+    return directoryItems.some((item) => isSameDirectoryItem(item, containingAppInfo))
+      ? selectedInfo
+      : containingAppInfo;
+  }
+
+  function getDirectoryItemWithInfo(item: DirectoryItem, directoryInfo: DirectoryInfo): DirectoryItem {
+    const iconDataUrl = directoryInfo.iconDataUrl?.trim();
+
+    return {
+      ...item,
+      comparisonPath: directoryInfo.comparisonPath,
+      iconDataUrl: iconDataUrl || item.iconDataUrl,
+      name: directoryInfo.name.trim() || item.name,
+      path: directoryInfo.path,
+    };
+  }
+
+  function hasDirectoryInfoChanged(item: DirectoryItem, directoryInfo: DirectoryInfo): boolean {
+    const nextItem = getDirectoryItemWithInfo(item, directoryInfo);
+
+    return (
+      item.name !== nextItem.name ||
+      item.path !== nextItem.path ||
+      item.comparisonPath !== nextItem.comparisonPath ||
+      item.iconDataUrl !== nextItem.iconDataUrl
+    );
+  }
+
   async function handlePickDirectory() {
     const selectedPath = await openDialog({
       title: localizedCopy.selectDirectory,
@@ -4463,17 +5508,45 @@ function MainApp() {
       return;
     }
 
-    if (directoryItems.some((item) => isSameDirectoryPath(item.path, selectedPath))) {
-      setLaunchError(localizedCopy.directoryAlreadyAdded);
-      return;
-    }
-
     if (directoryItems.length >= getRootLaunchGridCapacity(dockGridSettings)) {
       setLaunchError(localizedCopy.gridFull);
       return;
     }
 
-    const directoryName = getPathDisplayName(selectedPath);
+    let directoryInfo: DirectoryInfo;
+
+    try {
+      directoryInfo = await resolveDirectoryInfoForAdd(selectedPath);
+    } catch {
+      setLaunchError(localizedCopy.invalidDirectorySelection);
+      return;
+    }
+
+    const directoryName = directoryInfo.name.trim() || getPathDisplayName(selectedPath);
+
+    const existingDirectoryItem = directoryItems.find((item) =>
+      isSameDirectoryItem(item, directoryInfo),
+    );
+
+    if (existingDirectoryItem) {
+      if (hasDirectoryInfoChanged(existingDirectoryItem, directoryInfo)) {
+        setDirectoryItems((items) =>
+          normalizeRootDirectoryPositions(
+            items.map((item) =>
+              item.id === existingDirectoryItem.id
+                ? getDirectoryItemWithInfo(item, directoryInfo)
+                : item,
+            ),
+            dockGridSettings,
+          ),
+        );
+        setLaunchError(null);
+        return;
+      }
+
+      setLaunchError(localizedCopy.directoryAlreadyAdded);
+      return;
+    }
 
     if (!directoryName) {
       setLaunchError(localizedCopy.invalidDirectorySelection);
@@ -4481,8 +5554,19 @@ function MainApp() {
     }
 
     setDirectoryItems((items) => {
+      const existingItem = items.find((item) => isSameDirectoryItem(item, directoryInfo));
+
+      if (existingItem && hasDirectoryInfoChanged(existingItem, directoryInfo)) {
+        return normalizeRootDirectoryPositions(
+          items.map((item) =>
+            item.id === existingItem.id ? getDirectoryItemWithInfo(item, directoryInfo) : item,
+          ),
+          dockGridSettings,
+        );
+      }
+
       if (
-        items.some((item) => isSameDirectoryPath(item.path, selectedPath)) ||
+        existingItem ||
         items.length >= getRootLaunchGridCapacity(dockGridSettings)
       ) {
         return items;
@@ -4503,7 +5587,9 @@ function MainApp() {
         {
           id: nextItemId,
           name: directoryName,
-          path: selectedPath,
+          path: directoryInfo.path,
+          comparisonPath: directoryInfo.comparisonPath,
+          iconDataUrl: directoryInfo.iconDataUrl?.trim() || undefined,
           position,
           createdAt: Date.now(),
         },
@@ -4560,6 +5646,44 @@ function MainApp() {
       setLaunchError(null);
     } catch {
       setLaunchError(localizedCopy.openDirectoryFailed);
+    }
+  }
+
+  async function handleOrderlyShutdown() {
+    if (isOrderlyShutdownPending) {
+      return;
+    }
+
+    setLaunchError(null);
+
+    let confirmed = false;
+
+    try {
+      confirmed = await confirmDialog(localizedCopy.orderlyShutdownConfirmMessage, {
+        cancelLabel: localizedCopy.orderlyShutdownCancel,
+        kind: "warning",
+        okLabel: localizedCopy.orderlyShutdownConfirmOk,
+        title: localizedCopy.orderlyShutdownTitle,
+      });
+    } catch (error) {
+      console.error("Failed to open shutdown confirmation dialog", error);
+      setLaunchError(localizedCopy.orderlyShutdownFailed);
+      return;
+    }
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsOrderlyShutdownPending(true);
+
+    try {
+      await invoke("request_orderly_shutdown");
+      window.setTimeout(() => setIsOrderlyShutdownPending(false), 15_000);
+    } catch (error) {
+      console.error("Failed to request orderly shutdown", error);
+      setIsOrderlyShutdownPending(false);
+      setLaunchError(localizedCopy.orderlyShutdownFailed);
     }
   }
 
@@ -4624,6 +5748,22 @@ function MainApp() {
             onPointerDown={handleDockViewPointerDown}
           >
             {launchError && <p className="workspace-alert">{launchError}</p>}
+
+            <button
+              className="shutdown-icon-button"
+              type="button"
+              aria-label={localizedCopy.orderlyShutdown}
+              title={
+                isOrderlyShutdownPending
+                  ? localizedCopy.orderlyShutdownStarting
+                  : localizedCopy.orderlyShutdown
+              }
+              disabled={isOrderlyShutdownPending}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={() => void handleOrderlyShutdown()}
+            >
+              <PowerOff size={19} strokeWidth={2.25} aria-hidden="true" />
+            </button>
 
             <div className="dock-view-tabs" role="tablist" aria-label={localizedCopy.workspace}>
               {dockContentTabs.map((tab) => {
@@ -4823,9 +5963,7 @@ function MainApp() {
                   }
                   aria-hidden="true"
                 >
-                  <span className="directory-icon">
-                    <Folder size={36} strokeWidth={1.75} />
-                  </span>
+                  {renderDirectoryIcon(draggedDirectoryItem)}
                   <span className="launch-app-delete launch-drag-delete">
                     <X size={14} strokeWidth={2.6} />
                   </span>
@@ -4903,6 +6041,66 @@ function MainApp() {
                       </option>
                     ))}
                   </select>
+                </div>
+              </div>
+
+              <div className="settings-row">
+                <div className="setting-label">
+                  <span className="setting-icon" aria-hidden="true">
+                    <Dock size={18} strokeWidth={2.2} />
+                  </span>
+                  <strong>{localizedCopy.dockIconVisibilitySetting}</strong>
+                </div>
+
+                <label className="switch-control">
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    checked={dockIconVisible}
+                    aria-label={localizedCopy.dockIconVisibilityToggle}
+                    onChange={(event) => setDockIconVisible(event.currentTarget.checked)}
+                  />
+                  <span className="switch-track" aria-hidden="true">
+                    <span className="switch-thumb" />
+                  </span>
+                  <span className="switch-value">
+                    {dockIconVisible ? localizedCopy.dockIconVisible : localizedCopy.dockIconHidden}
+                  </span>
+                </label>
+              </div>
+
+              <div className="settings-row">
+                <div className="setting-label">
+                  <span className="setting-icon" aria-hidden="true">
+                    <AppWindow size={18} strokeWidth={2.2} />
+                  </span>
+                  <strong>{localizedCopy.floatingBallStyleSetting}</strong>
+                </div>
+
+                <div className="floating-ball-style-options" role="radiogroup" aria-label={localizedCopy.floatingBallStyleSetting}>
+                  {floatingBallStyleOptions.map((option) => {
+                    const isActive = floatingBallStyle === option.value;
+
+                    return (
+                      <button
+                        className={isActive ? "floating-ball-style-option active" : "floating-ball-style-option"}
+                        type="button"
+                        role="radio"
+                        aria-checked={isActive}
+                        key={option.value}
+                        onClick={() => setFloatingBallStyle(option.value)}
+                      >
+                        <span className="floating-ball-style-preview" aria-hidden="true">
+                          <FloatingBallVisual
+                            floatingBallStyle={option.value}
+                            isPreview
+                            metricsHistory={previewMetricsHistory}
+                          />
+                        </span>
+                        <span>{option.label[appLanguage]}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 

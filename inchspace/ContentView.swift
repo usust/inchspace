@@ -4,56 +4,36 @@
 //
 //  Created by lyu on 8/3/26.
 //
+//  应用根视图：组织可折叠侧栏、内容导航和全局工具搜索。
 
 import SwiftUI
-import SwiftData
 
 struct ContentView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query private var items: [Item]
+    @State private var selectedDestination: SidebarDestination? = .workspace
+    @State private var searchText = ""
 
+    /// 构建应用的根界面。
+    /// - Returns: 包含侧栏、内容区和全局搜索入口的分栏视图。
     var body: some View {
+        // 使用系统分栏组件，让侧栏自动获得 macOS 26 的 Liquid Glass 与折叠行为。
         NavigationSplitView {
-            List {
-                ForEach(items) { item in
-                    NavigationLink {
-                        Text("Item at \(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))")
-                    } label: {
-                        Text(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))
-                    }
-                }
-                .onDelete(perform: deleteItems)
-            }
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200)
-            .toolbar {
-                ToolbarItem {
-                    Button(action: addItem) {
-                        Label("Add Item", systemImage: "plus")
-                    }
-                }
-            }
+            AppSidebar(selection: $selectedDestination)
         } detail: {
-            Text("Select an item")
-        }
-    }
-
-    private func addItem() {
-        withAnimation {
-            let newItem = Item(timestamp: Date())
-            modelContext.insert(newItem)
-        }
-    }
-
-    private func deleteItems(offsets: IndexSet) {
-        withAnimation {
-            for index in offsets {
-                modelContext.delete(items[index])
+            NavigationStack {
+                WorkspaceView(
+                    destination: selectedDestination ?? .workspace,
+                    searchText: searchText
+                )
+                .navigationDestination(for: ToolDefinition.self) { tool in
+                    ToolDetailView(tool: tool)
+                }
             }
         }
+        .navigationSplitViewStyle(.balanced)
+        .searchable(text: $searchText, placement: .toolbar, prompt: "搜索工具")
     }
 }
 
 #Preview {
     ContentView()
-        .modelContainer(for: Item.self, inMemory: true)
 }

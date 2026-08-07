@@ -4,36 +4,63 @@
 //
 //  Created by lyu on 8/3/26.
 //
-//  应用根视图：组织可折叠侧栏、内容导航和全局工具搜索。
+//  应用根视图：组织可折叠侧栏和空白详情区。
 
 import SwiftUI
 
 struct ContentView: View {
-    @State private var selectedDestination: SidebarDestination? = .workspace
-    @State private var searchText = ""
+    @StateObject private var syncManager: ICloudSyncManager
+    @StateObject private var repository: LaunchpadRepository
+    @State private var selection: SidebarDestination? = .workspace
+    @Environment(\.scenePhase) private var scenePhase
 
-    /// 构建应用的根界面。
-    /// - Returns: 包含侧栏、内容区和全局搜索入口的分栏视图。
+    init() {
+        let syncManager = ICloudSyncManager()
+        _syncManager = StateObject(wrappedValue: syncManager)
+        _repository = StateObject(wrappedValue: LaunchpadRepository(syncManager: syncManager))
+    }
+
     var body: some View {
-        // 使用系统分栏组件，让侧栏自动获得 macOS 26 的 Liquid Glass 与折叠行为。
         NavigationSplitView {
-            AppSidebar(selection: $selectedDestination)
+            AppSidebar(selection: $selection)
         } detail: {
-            NavigationStack {
-                WorkspaceView(
-                    destination: selectedDestination ?? .workspace,
-                    searchText: searchText
-                )
-                .navigationDestination(for: ToolDefinition.self) { tool in
-                    ToolDetailView(tool: tool)
-                }
-            }
+            detailView
         }
         .navigationSplitViewStyle(.balanced)
-        .searchable(text: $searchText, placement: .toolbar, prompt: "搜索工具")
+        .task {
+            await repository.startCloudSync()
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                Task { await repository.refreshCloudData() }
+            } else {
+                repository.saveImmediately()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var detailView: some View {
+        let destination = selection ?? .workspace
+        switch destination {
+        case .workspace:
+            WorkbenchView(repository: repository)
+        case .text, .image, .conversion, .developer:
+            ContentUnavailableView(
+                destination.title,
+                systemImage: destination.systemImage,
+                description: Text("此工具区域将在后续版本中提供。")
+            )
+        case .settings:
+            SettingsView(syncManager: syncManager) {
+                Task { await repository.startCloudSync() }
+            }
+        }
     }
 }
 
-#Preview {
-    ContentView()
+#if DEBUG
+struct ContentView_Previews: PreviewProvider {
+    static var previews: some View { ContentView() }
 }
+#endif

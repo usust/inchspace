@@ -130,11 +130,11 @@ final class LaunchpadRepository: ObservableObject {
             throw RepositoryError.duplicateItem
         }
 
+        var order = rootEntries(in: item.category).map(\.id)
         var copy = library
         copy.items.append(item)
         library = copy
-        var order = rootEntries(in: item.category).map(\.id)
-        if !order.contains(item.id) { order.append(item.id) }
+        order.append(item.id)
         applyRootOrder(order, category: item.category, capacity: capacity)
         scheduleSave()
     }

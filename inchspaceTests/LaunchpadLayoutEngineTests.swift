@@ -562,6 +562,21 @@ final class LaunchpadLayoutEngineTests: XCTestCase {
         XCTAssertThrowsError(try repository.add(duplicate, capacity: 8))
     }
 
+    func testNewItemIsAppendedToEndOfEachCategory() throws {
+        for category in LaunchItemCategory.allCases {
+            let existingItems = makeItems(count: 5, category: category)
+            let (repository, _) = try makeRepository(
+                library: LaunchpadLibrary(items: existingItems)
+            )
+            let newItem = makeItem(index: 99, category: category)
+
+            try repository.add(newItem, capacity: 4)
+
+            XCTAssertEqual(repository.rootEntries(in: category).map(\.id), existingItems.map(\.id) + [newItem.id])
+            XCTAssertEqual(repository.pages(in: category, capacity: 4).last?.entries.last?.id, newItem.id)
+        }
+    }
+
     func testDuplicateIdentifierIsRejected() throws {
         let item = makeItems(count: 1, category: .application)[0]
         let (repository, _) = try makeRepository(library: LaunchpadLibrary(items: [item]))
@@ -668,23 +683,25 @@ final class LaunchpadLayoutEngineTests: XCTestCase {
     }
 
     private func makeItems(count: Int, category: LaunchItemCategory) -> [LaunchItem] {
-        (0..<count).map { index in
-            let target: LaunchTarget
-            switch category {
-            case .application:
-                target = .application(bundleIdentifier: "test.app.\(index)", path: nil)
-            case .directory:
-                target = .directory(path: "/tmp/test-directory-\(index)")
-            case .website:
-                target = .website(url: "https://example.com/\(index)")
-            }
-            return LaunchItem(
-                name: "项目 \(index)",
-                category: category,
-                target: target,
-                pageIndex: index / 4,
-                orderIndex: index % 4
-            )
+        (0..<count).map { makeItem(index: $0, category: category) }
+    }
+
+    private func makeItem(index: Int, category: LaunchItemCategory) -> LaunchItem {
+        let target: LaunchTarget
+        switch category {
+        case .application:
+            target = .application(bundleIdentifier: "test.app.\(index)", path: nil)
+        case .directory:
+            target = .directory(path: "/tmp/test-directory-\(index)")
+        case .website:
+            target = .website(url: "https://example.com/\(index)")
         }
+        return LaunchItem(
+            name: "项目 \(index)",
+            category: category,
+            target: target,
+            pageIndex: index / 4,
+            orderIndex: index % 4
+        )
     }
 }

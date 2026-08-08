@@ -1,0 +1,15 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>inchspace</title>
+        <item>
+            <title>0.0.4</title>
+            <pubDate>Sat, 08 Aug 2026 17:27:44 +0800</pubDate>
+            <link>https://github.com/usust/inchspace</link>
+            <sparkle:version>2</sparkle:version>
+            <sparkle:shortVersionString>0.0.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/usust/inchspace/releases/download/v0.0.4/inchspace-0.0.4.dmg" length="4379480" type="application/octet-stream" sparkle:edSignature="nm6PdXbdQ9IOAeQfwsWeicvbwy2+pyMFnh+VmBC343ag83fb34JaGTZJMhF6OQLmHqtifbrw3UOIvkGA1+yxBA=="/>
+        </item>
+    </channel>
+</rss>

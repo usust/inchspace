@@ -7,9 +7,9 @@
             <pubDate>Sat, 08 Aug 2026 17:27:44 +0800</pubDate>
             <link>https://github.com/usust/inchspace</link>
             <sparkle:version>2</sparkle:version>
-            <sparkle:shortVersionString>0.0.4</sparkle:shortVersionString>
+            <sparkle:shortVersionString>0.0.5</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/usust/inchspace/releases/download/v0.0.4/inchspace-0.0.4.dmg" length="4379480" type="application/octet-stream" sparkle:edSignature="nm6PdXbdQ9IOAeQfwsWeicvbwy2+pyMFnh+VmBC343ag83fb34JaGTZJMhF6OQLmHqtifbrw3UOIvkGA1+yxBA=="/>
+            <enclosure url="https://github.com/usust/inchspace/releases/download/v0.0.5/inchspace-0.0.5.dmg" length="4379619" type="application/octet-stream" sparkle:edSignature="Ia9Fm0U/uitebKNoV123/VlkTwQhyPLd6fqCyhi00pBdSAFcHYYseplmgehQuCBw6+OTHvd7svpMc1V0EqwjAw=="/>
         </item>
     </channel>
 </rss>

@@ -10,6 +10,8 @@ import SwiftUI
 
 @main
 struct inchspaceApp: App {
+    @StateObject private var updateController = UpdateController()
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -17,5 +19,13 @@ struct inchspaceApp: App {
         }
         .defaultSize(width: 1180, height: 800)
         .windowResizability(.contentMinSize)
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Button("检查更新…") {
+                    updateController.checkForUpdates()
+                }
+                .disabled(!updateController.canCheckForUpdates)
+            }
+        }
     }
 }

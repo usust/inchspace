@@ -1,0 +1,169 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Test, package, and publish
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Validate release tag
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "Release tag must exactly match vX.Y.Z using numeric components." >&2
+            exit 1
+          fi
+          echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Show toolchain versions
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          swift --version
+          xcodebuild -showsdks
+
+      - name: Resolve Swift packages
+        run: |
+          set -euo pipefail
+          xcodebuild -resolvePackageDependencies \
+            -project inchspace.xcodeproj \
+            -scheme inchspace \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/SourcePackages"
+
+      - name: Run all unit tests
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project inchspace.xcodeproj \
+            -scheme inchspace \
+            -destination 'platform=macOS' \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/SourcePackages" \
+            -derivedDataPath "$RUNNER_TEMP/TestDerivedData" \
+            -resultBundlePath "$RUNNER_TEMP/ReleaseTestResults.xcresult" \
+            CODE_SIGNING_ALLOWED=NO \
+            MARKETING_VERSION="$RELEASE_VERSION" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            | tee "$RUNNER_TEMP/xcodebuild-release-test.log"
+
+      - name: Build universal ad-hoc signed archive
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            -project inchspace.xcodeproj \
+            -scheme inchspace \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -archivePath "$RUNNER_TEMP/inchspace.xcarchive" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/SourcePackages" \
+            -derivedDataPath "$RUNNER_TEMP/ArchiveDerivedData" \
+            MARKETING_VERSION="$RELEASE_VERSION" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            ARCHS='arm64 x86_64' \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_REQUIRED=YES \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=- \
+            DEVELOPMENT_TEAM= \
+            PROVISIONING_PROFILE_SPECIFIER= \
+            | tee "$RUNNER_TEMP/xcodebuild-archive.log"
+
+      - name: Validate archive
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/inchspace.xcarchive/Products/Applications/inchspace.app"
+          info="$app/Contents/Info.plist"
+          executable="$app/Contents/MacOS/inchspace"
+
+          test -d "$app"
+          test -f "$info"
+          test -x "$executable"
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info")" == "vip.lylab.inchspace" ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info")" == "$RELEASE_VERSION" ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$info")" == "$BUILD_NUMBER" ]]
+
+          codesign --verify --deep --strict --verbose=2 "$app"
+          entitlements="$RUNNER_TEMP/inchspace-entitlements.plist"
+          codesign -d --entitlements :- "$app" > "$entitlements"
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.app-sandbox' "$entitlements")" == "true" ]]
+          /usr/libexec/PlistBuddy -c 'Print :com.apple.security.network.client' "$entitlements" >/dev/null
+          /usr/libexec/PlistBuddy -c 'Print :com.apple.security.files.user-selected.read-write' "$entitlements" >/dev/null
+
+          architectures="$(lipo -archs "$executable")"
+          [[ " $architectures " == *" arm64 "* ]]
+          [[ " $architectures " == *" x86_64 "* ]]
+
+      - name: Package release ZIP
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ReleaseFiles"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$RUNNER_TEMP/inchspace.xcarchive/Products/Applications/inchspace.app" \
+            "$RUNNER_TEMP/ReleaseFiles/inchspace-$RELEASE_VERSION.zip"
+
+          ditto -x -k \
+            "$RUNNER_TEMP/ReleaseFiles/inchspace-$RELEASE_VERSION.zip" \
+            "$RUNNER_TEMP/PackageVerification"
+          codesign --verify --deep --strict --verbose=2 \
+            "$RUNNER_TEMP/PackageVerification/inchspace.app"
+
+          cd "$RUNNER_TEMP/ReleaseFiles"
+          shasum -a 256 "inchspace-$RELEASE_VERSION.zip" \
+            > "inchspace-$RELEASE_VERSION.zip.sha256"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "$RELEASE_TAG" \
+            "$RUNNER_TEMP/ReleaseFiles/inchspace-$RELEASE_VERSION.zip" \
+            "$RUNNER_TEMP/ReleaseFiles/inchspace-$RELEASE_VERSION.zip.sha256" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "inchspace $RELEASE_VERSION" \
+            --generate-notes
+
+      - name: Upload diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-diagnostics-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/ReleaseTestResults.xcresult
+            ${{ runner.temp }}/xcodebuild-release-test.log
+            ${{ runner.temp }}/xcodebuild-archive.log
+          if-no-files-found: ignore
+          retention-days: 7
+

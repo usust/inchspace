@@ -102,6 +102,9 @@ Gatekeeper。
 签名、GitHub Release 创建，以及 `gh-pages` Feed 发布。最后一步执行前会再次询问；
 自动化环境可以传入 `--yes`。
 
+脚本默认复用 `/private/tmp/inchspace-source-packages` 作为 SwiftPM 缓存，避免每次发布都
+重新下载 Sparkle。需要更换缓存位置时可设置 `SPARKLE_SOURCE_PACKAGES_DIR`。
+
 内部构建号默认取已发布 appcast 与工程 `CURRENT_PROJECT_VERSION` 的较大值再加一。如需
 特殊覆盖，可使用 `--build`，但该值仍必须大于 appcast 中已发布的最大构建号：
 

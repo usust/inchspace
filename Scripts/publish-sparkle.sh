@@ -13,6 +13,7 @@ usage() {
   echo "Optional environment variables:" >&2
   echo "  SPARKLE_ACCOUNT           generate_keys account (default: inchspace)" >&2
   echo "  SPARKLE_BIN_DIR           Directory containing Sparkle command-line tools" >&2
+  echo "  SPARKLE_SOURCE_PACKAGES_DIR  Reusable SwiftPM cache directory" >&2
 }
 
 fail() {
@@ -99,7 +100,7 @@ if gh release view "$tag" --repo "$repo_slug" >/dev/null 2>&1; then
 fi
 
 temporary_root="$(mktemp -d /private/tmp/inchspace-sparkle-release.XXXXXX)"
-source_packages="$temporary_root/SourcePackages"
+source_packages="${SPARKLE_SOURCE_PACKAGES_DIR:-/private/tmp/inchspace-source-packages}"
 derived_data="$temporary_root/DerivedData"
 test_derived_data="$temporary_root/TestDerivedData"
 archive_path="$temporary_root/inchspace.xcarchive"
@@ -122,7 +123,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-mkdir -p "$updates_dir" "$dmg_root" "$release_dir"
+mkdir -p "$source_packages" "$updates_dir" "$dmg_root" "$release_dir"
 
 echo "Resolving Sparkle package..."
 xcodebuild -resolvePackageDependencies \

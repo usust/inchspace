@@ -6,6 +6,7 @@
 	<true/>
 	<key>SUFeedURL</key>
 	<string>https://usust.github.io/inchspace/appcast.xml</string>
+	<!-- TODO: Replace SPARKLE_PUBLIC_ED_KEY with the real Ed25519 public key before release. -->
 	<key>SUPublicEDKey</key>
 	<string>$(SPARKLE_PUBLIC_ED_KEY)</string>
 </dict>

@@ -1,25 +1,26 @@
 # GitHub 自动编译与发布
 
-当前阶段启用手动 CI 和基于版本 Tag 的自动编译、GitHub Release。Sparkle 自动更新、EdDSA 密钥和 GitHub Pages 暂不参与发布。
+当前保留手动 CI。Sparkle 更新使用 `Scripts/publish-sparkle.sh` 在发布 Mac 上完成
+Ad-hoc 签名、GitHub Release 和 GitHub Pages appcast 发布，不使用 Apple Developer
+账号、公证或 App Store Connect。
 
 ```text
 GitHub Actions 手动运行 CI
         └── 本机 Runner：解析依赖 → 无签名构建 → 运行全部单元测试
 
-vX.Y.Z tag
-        └── 本机 Runner：测试 → 通用 Archive → Ad-hoc 签名
-                       → DMG → SHA-256 → GitHub Release
+publish-sparkle.sh
+        └── 测试 → 通用 Archive → Ad-hoc 签名
+                → DMG → Sparkle appcast → GitHub Release + GitHub Pages
 ```
 
 ## 工作流
 
 - `.github/workflows/ci.yml`：只通过 GitHub Actions 页面手动运行。
-- `.github/workflows/release.yml`：只在推送严格符合 `vX.Y.Z` 的 Tag 时运行。
-- 两个工作流都使用本机 `[self-hosted, macOS, ARM64]` Runner。
-- Release 同时构建 `arm64` 和 `x86_64`。
-- 显示版本来自 Tag，例如 `v1.2.0` 对应 `1.2.0`。
-- 内部构建号使用 GitHub Actions `run_number`。
-- Release 使用 Ad-hoc 签名，不需要 Apple 付费开发者账号或证书。
+- `.github/workflows/release.yml`：保留为手动运行的旧发布诊断流程，不用于正式 Sparkle 发布。
+- 两个手动工作流都使用本机 `[self-hosted, macOS, ARM64]` Runner。
+- 正式发布脚本同时构建 `arm64` 和 `x86_64`。
+- 显示版本与内部构建号由发布命令明确传入。
+- 发布不要求 Apple Developer 账号或证书。
 - DMG 中包含 `inchspace.app` 和指向 `/Applications` 的快捷方式。
 
 ## GitHub 仓库设置
@@ -54,15 +55,17 @@ xcodebuild test \
 
 ## 发布版本
 
-推荐使用发布脚本。它会检查当前分支和远端状态，展示待提交文件并请求确认，然后依次提交修改、推送 `main`、创建并推送版本 Tag：
+正式更新请使用 Sparkle 发布脚本；完整的首次配置见
+`Docs/SparkleUpdate.md`：
 
 ```bash
-./Scripts/release.sh 1.0.0 "Release v1.0.0"
+./Scripts/publish-sparkle.sh 1.1.0 Docs/ReleaseNotes/1.1.0.md
 ```
 
-推送 `main` 不会触发编译；脚本最后推送的 `vX.Y.Z` Tag 才会触发一次自动发布流程。版本参数可以写成 `1.0.0` 或 `v1.0.0`。
+`Scripts/release.sh` 是此前 Ad-hoc GitHub Release 流程的辅助脚本，不要再用它发布
+Sparkle 更新。
 
-工作流成功后，GitHub Releases 页面会出现：
+脚本成功后，GitHub Releases 页面会出现：
 
 ```text
 inchspace-1.0.0.dmg
@@ -73,21 +76,14 @@ inchspace-1.0.0.dmg.sha256
 
 ## 用户首次运行
 
-由于没有 Developer ID 和 Apple 公证，用户首次运行仍会看到 Gatekeeper 提示：
+发布包只使用 Ad-hoc 签名，未经过 Apple 公证。用户首次运行时可能被 Gatekeeper 拦截：
 
 1. 打开 DMG，把 `inchspace.app` 拖到 DMG 中的 `Applications` 快捷方式。
-2. 正常尝试打开一次。
-3. 前往“系统设置 → 隐私与安全性”。
-4. 找到 inchspace 提示，选择“仍要打开”。
+2. 在 Finder 中右键应用并选择“打开”；如果系统仍拦截，则到“系统设置 → 隐私与
+   安全性”确认打开。
 
-不要关闭 Gatekeeper，也不要把删除 quarantine 属性作为正常安装步骤。
+不要要求用户全局关闭 Gatekeeper，也不要把删除 quarantine 属性作为安装步骤。
 
-## 后续接入 Sparkle
+## Sparkle
 
-Sparkle 代码目前保留但在公钥为占位值时禁用。将来启用自动更新时，再恢复以下发布步骤：
-
-- 生成并保护 EdDSA 私钥。
-- 把真实公钥写入应用。
-- 为 Release DMG 生成签名和 `appcast.xml`。
-- 使用 GitHub Pages 发布 appcast。
-- 从旧版本执行真实下载、替换和重启测试。
+首次密钥配置、发布脚本参数、安全要求和端到端更新测试见 `Docs/SparkleUpdate.md`。

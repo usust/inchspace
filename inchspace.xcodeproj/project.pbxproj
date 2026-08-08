@@ -152,11 +152,11 @@
 			);
 			mainGroup = 589DE9353020D4E0005B5DCB;
 			minimizedProjectReferenceProxies = 1;
-			preferredProjectObjectVersion = 77;
-			productRefGroup = 589DE93F3020D4E0005B5DCB /* Products */;
 			packageReferences = (
 				A20000023020D4E0005B5DCB /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 589DE93F3020D4E0005B5DCB /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -344,7 +344,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = Config/inchspace-Info.plist;
+				INFOPLIST_FILE = "Config/inchspace-Info.plist";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -354,13 +354,13 @@
 				PRODUCT_BUNDLE_IDENTIFIER = vip.lylab.inchspace;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
+				SPARKLE_PUBLIC_ED_KEY = "KpDaHyJdiFc1l+5YU/eDxrXO+ebD4rbvZ8w13TZCLWA=";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				SPARKLE_PUBLIC_ED_KEY = SPARKLE_PUBLIC_KEY_REQUIRED;
 			};
 			name = Debug;
 		};
@@ -379,7 +379,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = Config/inchspace-Info.plist;
+				INFOPLIST_FILE = "Config/inchspace-Info.plist";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -389,13 +389,13 @@
 				PRODUCT_BUNDLE_IDENTIFIER = vip.lylab.inchspace;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
+				SPARKLE_PUBLIC_ED_KEY = "KpDaHyJdiFc1l+5YU/eDxrXO+ebD4rbvZ8w13TZCLWA=";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				SPARKLE_PUBLIC_ED_KEY = SPARKLE_PUBLIC_KEY_REQUIRED;
 			};
 			name = Release;
 		};

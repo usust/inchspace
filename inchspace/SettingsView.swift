@@ -8,6 +8,7 @@ import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @ObservedObject var syncManager: ICloudSyncManager
+    @ObservedObject var updateManager: UpdateManager
     let onSyncConfigurationChanged: () -> Void
     @State private var isChoosingFolder = false
     @State private var isConfirmingFolderRemoval = false
@@ -101,6 +102,8 @@ struct SettingsView: View {
                         .textSelection(.enabled)
                 }
             }
+
+            UpdateSettingsSection(updateManager: updateManager)
         }
         .formStyle(.grouped)
         .frame(maxWidth: 640)

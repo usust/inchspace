@@ -124,25 +124,54 @@ jobs:
           [[ " $architectures " == *" arm64 "* ]]
           [[ " $architectures " == *" x86_64 "* ]]
 
-      - name: Package release ZIP
+      - name: Package and verify release DMG
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/ReleaseFiles"
-          ditto -c -k --sequesterRsrc --keepParent \
-            "$RUNNER_TEMP/inchspace.xcarchive/Products/Applications/inchspace.app" \
-            "$RUNNER_TEMP/ReleaseFiles/inchspace-$RELEASE_VERSION.zip"
+          release_dir="$RUNNER_TEMP/ReleaseFiles"
+          dmg_root="$RUNNER_TEMP/DmgRoot"
+          mount_point="$RUNNER_TEMP/DmgMount"
+          source_app="$RUNNER_TEMP/inchspace.xcarchive/Products/Applications/inchspace.app"
+          dmg="$release_dir/inchspace-$RELEASE_VERSION.dmg"
+          mounted_device=""
 
-          ditto -x -k \
-            "$RUNNER_TEMP/ReleaseFiles/inchspace-$RELEASE_VERSION.zip" \
-            "$RUNNER_TEMP/PackageVerification"
-          codesign --verify --deep --strict --verbose=2 \
-            "$RUNNER_TEMP/PackageVerification/inchspace.app"
+          cleanup() {
+            if [[ -n "$mounted_device" ]]; then
+              hdiutil detach "$mounted_device" || true
+            fi
+          }
+          trap cleanup EXIT
 
-          cd "$RUNNER_TEMP/ReleaseFiles"
-          shasum -a 256 "inchspace-$RELEASE_VERSION.zip" \
-            > "inchspace-$RELEASE_VERSION.zip.sha256"
+          mkdir -p "$release_dir" "$dmg_root" "$mount_point"
+          ditto "$source_app" "$dmg_root/inchspace.app"
+          ln -s /Applications "$dmg_root/Applications"
+
+          hdiutil create \
+            -volname "inchspace $RELEASE_VERSION" \
+            -srcfolder "$dmg_root" \
+            -fs HFS+ \
+            -format UDZO \
+            -imagekey zlib-level=9 \
+            -ov \
+            "$dmg"
+          hdiutil verify "$dmg"
+
+          attach_output="$(hdiutil attach -readonly -nobrowse -mountpoint "$mount_point" "$dmg")"
+          mounted_device="$(awk '/^\/dev\// { print $1; exit }' <<< "$attach_output")"
+          [[ -n "$mounted_device" ]]
+          test -d "$mount_point/inchspace.app"
+          test -L "$mount_point/Applications"
+          [[ "$(readlink "$mount_point/Applications")" == "/Applications" ]]
+          codesign --verify --deep --strict --verbose=2 "$mount_point/inchspace.app"
+
+          hdiutil detach "$mounted_device"
+          mounted_device=""
+          trap - EXIT
+
+          cd "$release_dir"
+          shasum -a 256 "inchspace-$RELEASE_VERSION.dmg" \
+            > "inchspace-$RELEASE_VERSION.dmg.sha256"
 
       - name: Create GitHub Release
         env:
@@ -152,8 +181,8 @@ jobs:
         run: |
           set -euo pipefail
           /opt/homebrew/bin/gh release create "$RELEASE_TAG" \
-            "$RUNNER_TEMP/ReleaseFiles/inchspace-$RELEASE_VERSION.zip" \
-            "$RUNNER_TEMP/ReleaseFiles/inchspace-$RELEASE_VERSION.zip.sha256" \
+            "$RUNNER_TEMP/ReleaseFiles/inchspace-$RELEASE_VERSION.dmg" \
+            "$RUNNER_TEMP/ReleaseFiles/inchspace-$RELEASE_VERSION.dmg.sha256" \
             --repo "$GITHUB_REPOSITORY" \
             --title "inchspace $RELEASE_VERSION" \
             --generate-notes

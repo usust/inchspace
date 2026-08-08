@@ -255,6 +255,10 @@ codesign --verify --deep --strict --verbose=2 "$app_path"
 code_signing_details="$(codesign -dvv "$app_path" 2>&1)"
 [[ "$code_signing_details" == *"Signature=adhoc"* ]] || \
   fail "Archive is not ad-hoc signed as requested."
+archived_entitlements_path="$temporary_root/ArchivedEntitlements.plist"
+codesign -d --entitlements :- "$app_path" > "$archived_entitlements_path" 2>/dev/null
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.cs.disable-library-validation' "$archived_entitlements_path")" == "true" ]] || \
+  fail "Ad-hoc Sparkle builds require the disable-library-validation entitlement."
 architectures="$(lipo -archs "$app_path/Contents/MacOS/inchspace")"
 [[ " $architectures " == *" arm64 "* && " $architectures " == *" x86_64 "* ]] || \
   fail "Archive must contain both arm64 and x86_64."

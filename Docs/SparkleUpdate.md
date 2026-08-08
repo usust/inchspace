@@ -38,6 +38,11 @@ Developer 账号、公证或 App Store Connect。
 任何 Apple Developer 证书或在线服务。Sparkle framework、XPC services 和应用本体仍
 必须保持签名结构有效，不能在归档后随意修改 bundle 内容。
 
+Ad-hoc 签名没有可供主程序与 Sparkle framework 共享的 Team ID，因此应用 entitlement
+必须保留 `com.apple.security.cs.disable-library-validation`，否则 Hardened Runtime 会在
+启动阶段拒绝加载 Sparkle。发布脚本会检查这个 entitlement；App Sandbox 与 Hardened
+Runtime 本身仍保持开启。
+
 Ad-hoc 签名不建立 Apple 信任链，也没有公证票据。用户第一次下载安装时可能需要在
 Finder 中右键“打开”，或到“系统设置 → 隐私与安全性”确认。不要要求用户关闭
 Gatekeeper。

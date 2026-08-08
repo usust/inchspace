@@ -1,7 +1,6 @@
 name: CI
 
 on:
-  pull_request:
   push:
     branches:
       - main
@@ -12,8 +11,10 @@ permissions:
 jobs:
   test:
     name: Build and test
-    runs-on: macos-26
+    runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
 
     steps:
       - name: Check out repository
@@ -57,4 +58,3 @@ jobs:
             ${{ runner.temp }}/xcodebuild-test.log
           if-no-files-found: ignore
           retention-days: 7
-

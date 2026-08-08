@@ -15,8 +15,10 @@ concurrency:
 jobs:
   release:
     name: Test, package, and publish
-    runs-on: macos-26
+    runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
 
     steps:
       - name: Check out repository
@@ -40,6 +42,7 @@ jobs:
           xcodebuild -version
           swift --version
           xcodebuild -showsdks
+          /opt/homebrew/bin/gh --version
 
       - name: Resolve Swift packages
         run: |
@@ -148,7 +151,7 @@ jobs:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          gh release create "$RELEASE_TAG" \
+          /opt/homebrew/bin/gh release create "$RELEASE_TAG" \
             "$RUNNER_TEMP/ReleaseFiles/inchspace-$RELEASE_VERSION.zip" \
             "$RUNNER_TEMP/ReleaseFiles/inchspace-$RELEASE_VERSION.zip.sha256" \
             --repo "$GITHUB_REPOSITORY" \
@@ -166,4 +169,3 @@ jobs:
             ${{ runner.temp }}/xcodebuild-archive.log
           if-no-files-found: ignore
           retention-days: 7
-

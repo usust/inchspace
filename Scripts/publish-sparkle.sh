@@ -25,6 +25,34 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || fail "Required command not found: $1"
 }
 
+latest_sparkle_build() {
+  local appcast_path="$1"
+  local sparkle_namespace='http://www.andymatuschak.org/xml-namespaces/sparkle'
+  local version_nodes_xpath="//*[local-name()='version' and namespace-uri()='$sparkle_namespace'] | //@*[local-name()='version' and namespace-uri()='$sparkle_namespace']"
+  local version_count
+  local version_index
+  local latest_build=0
+  local candidate_build
+  local candidate_value
+
+  version_count="$(xmllint --xpath "count($version_nodes_xpath)" "$appcast_path")" || \
+    fail "Could not read Sparkle build numbers from appcast.xml."
+  (( version_count > 0 )) || fail "Existing appcast.xml has no Sparkle build numbers."
+
+  for (( version_index = 1; version_index <= version_count; version_index++ )); do
+    candidate_build="$(xmllint --xpath "string(($version_nodes_xpath)[$version_index])" "$appcast_path")" || \
+      fail "Could not read Sparkle build number $version_index from appcast.xml."
+    [[ "$candidate_build" =~ '^[0-9]+$' ]] || \
+      fail "Invalid Sparkle build number '$candidate_build' in appcast.xml."
+    candidate_value=$(( 10#$candidate_build ))
+    if (( candidate_value > latest_build )); then
+      latest_build=$candidate_value
+    fi
+  done
+
+  echo "$latest_build"
+}
+
 build_number=""
 positional_arguments=()
 
@@ -73,7 +101,7 @@ if [[ -n "$release_notes" ]]; then
   release_notes="${release_notes:A}"
 fi
 
-for command_name in xcodebuild codesign ditto hdiutil git gh shasum plutil lipo find xmllint grep sed awk; do
+for command_name in xcodebuild codesign ditto hdiutil git gh shasum plutil lipo find xmllint awk; do
   require_command "$command_name"
 done
 
@@ -173,15 +201,7 @@ fi
 latest_published_build=0
 if [[ -f "$updates_dir/appcast.xml" ]]; then
   xmllint --noout "$updates_dir/appcast.xml" || fail "Existing appcast.xml is not valid XML."
-  published_builds="$(grep -oE 'sparkle:version="[0-9]+"' "$updates_dir/appcast.xml" \
-    | sed -E 's/[^0-9]//g' || true)"
-  while IFS= read -r candidate_build; do
-    [[ -n "$candidate_build" ]] || continue
-    candidate_value=$(( 10#$candidate_build ))
-    if (( candidate_value > latest_published_build )); then
-      latest_published_build=$candidate_value
-    fi
-  done <<< "$published_builds"
+  latest_published_build="$(latest_sparkle_build "$updates_dir/appcast.xml")"
 fi
 
 project_build="$(xcodebuild \
@@ -207,6 +227,7 @@ else
     fail "Manual build $build_number must be greater than published build $latest_published_build."
   echo "Using manually selected build number $build_number."
 fi
+build_number_value=$(( 10#$build_number ))
 
 echo "Running unit tests..."
 xcodebuild test \
@@ -304,6 +325,10 @@ if [[ -n "$release_notes" ]]; then
 fi
 "$generate_appcast" "${appcast_arguments[@]}" "$updates_dir"
 [[ -s "$updates_dir/appcast.xml" ]] || fail "generate_appcast did not create appcast.xml."
+xmllint --noout "$updates_dir/appcast.xml" || fail "Generated appcast.xml is not valid XML."
+generated_latest_build="$(latest_sparkle_build "$updates_dir/appcast.xml")"
+(( generated_latest_build == build_number_value )) || \
+  fail "Generated appcast latest build is $generated_latest_build, expected $build_number."
 
 echo "Preparing the gh-pages update..."
 ditto "$updates_dir/appcast.xml" "$pages_repo/appcast.xml"

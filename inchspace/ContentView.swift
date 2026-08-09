@@ -12,6 +12,7 @@ struct ContentView: View {
     @ObservedObject private var updateManager: UpdateManager
     @StateObject private var syncManager: ICloudSyncManager
     @StateObject private var repository: LaunchpadRepository
+    @StateObject private var runnerStore: RunnerStore
     @State private var selection: SidebarDestination? = .workspace
     @Environment(\.scenePhase) private var scenePhase
 
@@ -20,6 +21,7 @@ struct ContentView: View {
         let syncManager = ICloudSyncManager()
         _syncManager = StateObject(wrappedValue: syncManager)
         _repository = StateObject(wrappedValue: LaunchpadRepository(syncManager: syncManager))
+        _runnerStore = StateObject(wrappedValue: RunnerStore())
     }
 
     var body: some View {
@@ -32,6 +34,7 @@ struct ContentView: View {
         .task {
             await repository.startCloudSync()
         }
+        .task { await runnerStore.bootstrap() }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
                 Task { await repository.refreshCloudData() }
@@ -47,6 +50,10 @@ struct ContentView: View {
         switch destination {
         case .workspace:
             WorkbenchView(repository: repository)
+        case .appRepair:
+            AppRepairView()
+        case .runner:
+            RunnerView(store: runnerStore)
         case .text, .image, .conversion, .developer:
             ContentUnavailableView(
                 destination.title,

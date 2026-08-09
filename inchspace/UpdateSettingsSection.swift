@@ -46,9 +46,6 @@ struct UpdateSettingsSection: View {
             ))
             .disabled(!updateManager.isConfigured)
 
-            LabeledContent("当前版本", value: AppVersion.displayVersion)
-            LabeledContent("更新组件", value: "Sparkle 2")
-
             if !updateManager.isConfigured {
                 Text("完成 Sparkle 发布密钥配置后即可检查更新。")
                     .font(.caption)

@@ -347,18 +347,24 @@ struct LaunchpadGroupIcon: View {
                         .stroke(Color.primary.opacity(0.08), lineWidth: 1)
                 }
 
-            LazyVGrid(
-                columns: Array(repeating: GridItem(.fixed(16), spacing: 2), count: 3),
-                spacing: 2
-            ) {
-                ForEach(Array(items.prefix(9))) { item in
-                    LaunchpadIconImage(item: item, size: 16)
-                }
-                if items.isEmpty {
-                    Image(systemName: "folder")
-                        .foregroundStyle(.secondary)
-                        .frame(width: 52, height: 52)
-                        .gridCellColumns(3)
+            if items.isEmpty {
+                Image(systemName: "folder")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 52, height: 52)
+            } else {
+                LazyVGrid(
+                    columns: Array(repeating: GridItem(.fixed(16), spacing: 2), count: 3),
+                    spacing: 2
+                ) {
+                    ForEach(0..<9, id: \.self) { index in
+                        if items.indices.contains(index) {
+                            LaunchpadIconImage(item: items[index], size: 16)
+                        } else {
+                            Color.clear
+                                .frame(width: 16, height: 16)
+                                .accessibilityHidden(true)
+                        }
+                    }
                 }
             }
         }

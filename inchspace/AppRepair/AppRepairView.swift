@@ -44,7 +44,7 @@ struct AppRepairView: View {
             Button("移除隔离属性并修复") { model.repair() }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("将递归移除此应用的下载隔离属性，然后刷新 Launch Services 并重新验证。不会修改应用代码或关闭系统安全功能。")
+            Text("将递归移除此应用的下载隔离属性，然后刷新 Launch Services 并重新验证。不会修改应用代码或关闭系统安全功能；仅在应用归其他用户或系统所有时请求管理员授权。")
         }
     }
 

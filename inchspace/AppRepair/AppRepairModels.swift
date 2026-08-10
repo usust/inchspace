@@ -53,6 +53,8 @@ struct AppRepairReport: Sendable {
 enum AppRepairError: LocalizedError {
     case invalidApplication
     case accessDenied
+    case authorizationCancelled
+    case administratorAuthorizationFailed(String)
     case commandFailed(String)
 
     var errorDescription: String? {
@@ -61,6 +63,10 @@ enum AppRepairError: LocalizedError {
             "请选择一个有效的 macOS 应用（.app）。"
         case .accessDenied:
             "没有修改这个应用的权限。请确认应用未位于只读磁盘中，并重新选择。"
+        case .authorizationCancelled:
+            "已取消管理员授权，未能完成修复。应用内容没有被修改。"
+        case let .administratorAuthorizationFailed(message):
+            "管理员授权后仍未能完成修复：\(message)"
         case let .commandFailed(message):
             "修复未能完成：\(message)"
         }

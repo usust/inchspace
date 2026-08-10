@@ -27,12 +27,11 @@ struct AppRepairService: Sendable {
             FileManager.default.isExecutableFile(atPath: $0.path)
         } == true
 
-        let quarantine = run("/usr/bin/xattr", ["-r", "-p", "com.apple.quarantine", url.path])
         let signature = run("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--verbose=2", url.path])
         let gatekeeper = run("/usr/sbin/spctl", ["--assess", "--type", "execute", "--verbose=2", url.path])
         let architectures = executableURL.map { architectureNames(for: $0) } ?? []
 
-        let hasQuarantine = quarantine.exitCode == 0
+        let hasQuarantine = hasQuarantineAttribute(at: url)
         let signatureAccepted = signature.exitCode == 0
         let gatekeeperAccepted = gatekeeper.exitCode == 0
         let displayName = (info?["CFBundleDisplayName"] as? String)
@@ -97,15 +96,23 @@ struct AppRepairService: Sendable {
 
     nonisolated func repair(_ url: URL) throws -> AppRepairReport {
         let removal = run("/usr/bin/xattr", ["-r", "-d", "com.apple.quarantine", url.path])
-        // xattr 返回 1 也可能只是没有该属性；复检结果才是最终依据。
-        if removal.exitCode != 0 {
-            let check = run("/usr/bin/xattr", ["-r", "-p", "com.apple.quarantine", url.path])
-            if check.exitCode == 0 {
-                let message = conciseOutput(removal.output, fallback: "无法移除下载隔离属性。")
-                if message.localizedCaseInsensitiveContains("permission") || message.contains("不允许") {
-                    throw AppRepairError.accessDenied
-                }
+        // xattr 可能在移除部分文件后返回非零状态，因此始终以复检结果为准。
+        if removal.exitCode != 0, hasQuarantineAttribute(at: url) {
+            let message = conciseOutput(removal.output, fallback: "无法移除下载隔离属性。")
+            guard isPermissionFailure(removal.output) else {
                 throw AppRepairError.commandFailed(message)
+            }
+
+            // /Applications 中由其他用户或安装器写入的应用可能归 root 所有。
+            // 普通写入失败时再请求管理员授权，避免正常情况出现不必要的密码弹窗。
+            let elevatedRemoval = removeQuarantineWithAdministratorPrivileges(from: url)
+            if elevatedRemoval.exitCode != 0, hasQuarantineAttribute(at: url) {
+                if isAuthorizationCancelled(elevatedRemoval.output) {
+                    throw AppRepairError.authorizationCancelled
+                }
+                throw AppRepairError.administratorAuthorizationFailed(
+                    conciseOutput(elevatedRemoval.output, fallback: message)
+                )
             }
         }
 
@@ -115,6 +122,42 @@ struct AppRepairService: Sendable {
             throw AppRepairError.commandFailed("仍检测到下载隔离属性，请检查应用所在位置的写入权限。")
         }
         return report
+    }
+
+    nonisolated private func hasQuarantineAttribute(at url: URL) -> Bool {
+        // `xattr -r -p` 在包内任一文件没有该属性时也可能返回 1，不能用退出码判断。
+        // 列出属性名后精确匹配，既能识别只标在包根目录上的隔离属性，也能识别子项。
+        let result = run("/usr/bin/xattr", ["-r", url.path])
+        return result.output
+            .split(whereSeparator: \Character.isWhitespace)
+            .contains(Substring("com.apple.quarantine"))
+    }
+
+    nonisolated private func removeQuarantineWithAdministratorPrivileges(from url: URL) -> CommandResult {
+        let script = """
+        on run argv
+            set targetPath to item 1 of argv
+            do shell script ("/usr/bin/xattr -r -d com.apple.quarantine " & quoted form of targetPath) with administrator privileges
+        end run
+        """
+        return run("/usr/bin/osascript", ["-e", script, url.path])
+    }
+
+    nonisolated private func isPermissionFailure(_ output: String) -> Bool {
+        let normalized = output.lowercased()
+        return normalized.contains("operation not permitted")
+            || normalized.contains("permission denied")
+            || normalized.contains("not permitted")
+            || normalized.contains("不允许")
+            || normalized.contains("权限")
+    }
+
+    nonisolated private func isAuthorizationCancelled(_ output: String) -> Bool {
+        let normalized = output.lowercased()
+        return normalized.contains("user canceled")
+            || normalized.contains("user cancelled")
+            || normalized.contains("(-128)")
+            || normalized.contains("已取消")
     }
 
     nonisolated private func refreshLaunchServices(for url: URL) {

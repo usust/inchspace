@@ -3,6 +3,15 @@
     <channel>
         <title>inchspace</title>
         <item>
+            <title>0.0.7</title>
+            <pubDate>Tue, 11 Aug 2026 21:23:54 +0800</pubDate>
+            <link>https://github.com/usust/inchspace</link>
+            <sparkle:version>3</sparkle:version>
+            <sparkle:shortVersionString>0.0.7</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/usust/inchspace/releases/download/v0.0.7/inchspace-0.0.7.dmg" length="8357722" type="application/octet-stream" sparkle:edSignature="DIdT6P5jBl/7ewqrf99aHZj1IgXUvb8AzxvCl8qJS8Nrlps31Yvs8tg5Ns5xC0g6IpMlODeK9KE/+QthVzSECQ=="/>
+        </item>
+        <item>
             <title>0.0.4</title>
             <pubDate>Sat, 08 Aug 2026 17:27:44 +0800</pubDate>
             <link>https://github.com/usust/inchspace</link>

@@ -36,6 +36,12 @@ struct AppSidebar: View {
                         sidebarRow(for: destination)
                     }
                 }
+
+                Section {
+                    ForEach(SidebarDestination.terminalItems) { destination in
+                        sidebarRow(for: destination)
+                    }
+                }
             }
             .listStyle(.sidebar)
 

@@ -15,6 +15,7 @@ struct ContentView: View {
     @StateObject private var repository: LaunchpadRepository
     @StateObject private var runnerStore: RunnerStore
     @StateObject private var serverManager: ServerManager
+    @StateObject private var terminalManager: TerminalManager
     @State private var selection: SidebarDestination? = .workspace
     @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var visibilityController: AppVisibilityController
@@ -26,6 +27,7 @@ struct ContentView: View {
         _repository = StateObject(wrappedValue: LaunchpadRepository(syncManager: syncManager))
         _runnerStore = StateObject(wrappedValue: RunnerStore())
         _serverManager = StateObject(wrappedValue: ServerManager())
+        _terminalManager = StateObject(wrappedValue: TerminalManager())
     }
 
     var body: some View {
@@ -38,6 +40,10 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .inchspaceOpenSettings)) { _ in
             selection = .settings
         }
+        .onReceive(NotificationCenter.default.publisher(for: .inchspaceSelectTerminal)) { _ in
+            selection = .terminal
+        }
+        .onAppear { configureTerminalIntegration() }
         .task {
             await repository.startCloudSync()
         }
@@ -75,6 +81,8 @@ struct ContentView: View {
             RunnerView(store: runnerStore)
         case .servers:
             ServerManagerView(manager: serverManager)
+        case .terminal:
+            TerminalView(manager: terminalManager, serverManager: serverManager)
         case .text, .image, .conversion, .developer:
             ContentUnavailableView(
                 destination.title,
@@ -82,7 +90,7 @@ struct ContentView: View {
                 description: Text("此工具区域将在后续版本中提供。")
             )
         case .settings:
-            SettingsView(syncManager: syncManager, updateManager: updateManager) {
+            SettingsView(syncManager: syncManager, updateManager: updateManager, terminalManager: terminalManager) {
                 Task {
                     await repository.startCloudSync()
                     await synchronizePreferences(allowsUpload: true)
@@ -104,6 +112,26 @@ struct ContentView: View {
             )
         }
     }
+
+    private func configureTerminalIntegration() {
+        serverManager.terminalConnectionHandler = { [weak terminalManager, weak serverManager] server in
+            guard let terminalManager, let serverManager else { return }
+            let jumpHost = server.jumpHostID.flatMap { id in
+                serverManager.servers.first { $0.id == id }
+            }
+            terminalManager.openRemoteSession(
+                server: server,
+                credential: serverManager.credential(for: server),
+                jumpHost: jumpHost
+            )
+            serverManager.recordTerminalConnection(server)
+            NotificationCenter.default.post(name: .inchspaceSelectTerminal, object: server.id)
+        }
+    }
+}
+
+extension Notification.Name {
+    static let inchspaceSelectTerminal = Notification.Name("inchspace.selectTerminal")
 }
 
 #if DEBUG

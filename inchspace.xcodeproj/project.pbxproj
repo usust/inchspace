@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		A20000013020D4E0005B5DCB /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = A20000033020D4E0005B5DCB /* Sparkle */; };
+		A30000013020D4E0005B5DCB /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = A30000033020D4E0005B5DCB /* SwiftTerm */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -44,6 +45,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A20000013020D4E0005B5DCB /* Sparkle in Frameworks */,
+				A30000013020D4E0005B5DCB /* SwiftTerm in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -96,6 +98,7 @@
 			name = inchspace;
 			packageProductDependencies = (
 				A20000033020D4E0005B5DCB /* Sparkle */,
+				A30000033020D4E0005B5DCB /* SwiftTerm */,
 			);
 			productName = inchspace;
 			productReference = 589DE93E3020D4E0005B5DCB /* inchspace.app */;
@@ -154,6 +157,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				A20000023020D4E0005B5DCB /* XCRemoteSwiftPackageReference "Sparkle" */,
+				A30000023020D4E0005B5DCB /* XCRemoteSwiftPackageReference "SwiftTerm" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 589DE93F3020D4E0005B5DCB /* Products */;
@@ -480,6 +484,14 @@
 				version = 2.9.2;
 			};
 		};
+		A30000023020D4E0005B5DCB /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm";
+			requirement = {
+				kind = exactVersion;
+				version = 1.18.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -487,6 +499,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A20000023020D4E0005B5DCB /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
+		};
+		A30000033020D4E0005B5DCB /* SwiftTerm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A30000023020D4E0005B5DCB /* XCRemoteSwiftPackageReference "SwiftTerm" */;
+			productName = SwiftTerm;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

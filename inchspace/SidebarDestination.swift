@@ -14,6 +14,7 @@ enum SidebarDestination: String, Identifiable {
     case developer
     case runner
     case servers
+    case terminal
     case appRepair
     case settings
 
@@ -28,6 +29,7 @@ enum SidebarDestination: String, Identifiable {
         case .developer: "开发工具"
         case .runner: "运行中心"
         case .servers: "服务器"
+        case .terminal: "终端"
         case .appRepair: "应用修复"
         case .settings: "设置"
         }
@@ -42,6 +44,7 @@ enum SidebarDestination: String, Identifiable {
         case .developer: "chevron.left.forwardslash.chevron.right"
         case .runner: "play.circle"
         case .servers: "server.rack"
+        case .terminal: "terminal"
         case .appRepair: "wrench.and.screwdriver"
         case .settings: "gearshape"
         }
@@ -65,5 +68,9 @@ enum SidebarDestination: String, Identifiable {
 
     static let managementItems: [SidebarDestination] = [
         .servers,
+    ]
+
+    static let terminalItems: [SidebarDestination] = [
+        .terminal,
     ]
 }

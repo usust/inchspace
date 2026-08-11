@@ -204,6 +204,7 @@ final class AppVisibilityController: NSObject, ObservableObject {
     }
 
     func registerMainWindow(_ window: NSWindow) {
+        let isNewWindow = mainWindow !== window
         if let previousWindow = mainWindow, previousWindow !== window {
             NotificationCenter.default.removeObserver(
                 self,
@@ -238,8 +239,8 @@ final class AppVisibilityController: NSObject, ObservableObject {
             )
         }
 
-        if !window.isVisible {
-            position(window)
+        if isNewWindow, !window.isVisible {
+            applyInitialPosition(to: window)
         }
         refreshState()
     }
@@ -255,7 +256,6 @@ final class AppVisibilityController: NSObject, ObservableObject {
 
         if let window = mainWindow {
             if window.isMiniaturized { window.deminiaturize(nil) }
-            if !wasVisible { position(window) }
             show(window, animated: !wasVisible)
         } else {
             openMainWindow?()
@@ -481,7 +481,9 @@ final class AppVisibilityController: NSObject, ObservableObject {
         }
     }
 
-    private func position(_ window: NSWindow) {
+    /// Position is an initialization policy, not persistent layout state. After
+    /// this one call, the Window Server owns the user's dragged frame.
+    private func applyInitialPosition(to window: NSWindow) {
         switch preferences.position {
         case .lastPosition:
             _ = window.setFrameUsingName("inchspace.mainWindow")

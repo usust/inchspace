@@ -5,6 +5,7 @@ import SwiftUI
 
 @MainActor
 final class ServerManager: ObservableObject {
+    var terminalConnectionHandler: ((Server) -> Void)?
     @Published private(set) var servers: [Server] = []
     @Published private(set) var groups: [ServerGroup] = []
     @Published private(set) var tags: [ServerTag] = []
@@ -245,23 +246,15 @@ final class ServerManager: ObservableObject {
     }
 
     func connect(to server: Server) {
-        do {
-            let commandURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("inchspace-connect-\(UUID().uuidString).command")
-            let script = "#!/bin/zsh\n\(sshCommand(for: server))\n"
-            try Data(script.utf8).write(to: commandURL, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: commandURL.path)
-            let opened = NSWorkspace.shared.open(commandURL)
-            if !opened { throw ServerConnectionError.terminalUnavailable }
-            recordConnection(server.id, result: .opened)
-            Task {
-                try? await Task.sleep(for: .seconds(15))
-                try? FileManager.default.removeItem(at: commandURL)
-            }
-        } catch {
-            recordConnection(server.id, result: .failed)
-            presentedError = ServerPresentedError(error)
+        guard let terminalConnectionHandler else {
+            presentedError = ServerPresentedError("终端模块尚未准备就绪，请稍后重试。")
+            return
         }
+        terminalConnectionHandler(server)
+    }
+
+    func recordTerminalConnection(_ server: Server) {
+        recordConnection(server.id, result: .opened)
     }
 
     func copySSHCommand(for server: Server) {
@@ -591,14 +584,6 @@ final class ServerManager: ObservableObject {
             favoriteServerIDs: Array(favoriteServerIDs),
             detectedSystems: detectedSystems
         ))
-    }
-}
-
-private enum ServerConnectionError: LocalizedError {
-    case terminalUnavailable
-
-    var errorDescription: String? {
-        "未找到可以打开 SSH 连接脚本的终端应用。"
     }
 }
 

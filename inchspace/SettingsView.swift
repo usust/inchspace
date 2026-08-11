@@ -12,6 +12,7 @@ struct SettingsView: View {
     @EnvironmentObject private var visibilityController: AppVisibilityController
     @ObservedObject var syncManager: ICloudSyncManager
     @ObservedObject var updateManager: UpdateManager
+    @ObservedObject var terminalManager: TerminalManager
     let onSyncConfigurationChanged: () -> Void
     @State private var isChoosingFolder = false
     @State private var isConfirmingFolderRemoval = false
@@ -67,7 +68,7 @@ struct SettingsView: View {
                 } label: {
                     SettingsPreferenceLabel(
                         title: "窗口位置",
-                        description: "选择每次唤起时主窗口出现的位置",
+                        description: "选择主窗口首次创建时出现的位置",
                         systemImage: "macwindow.on.rectangle"
                     )
                 }
@@ -90,6 +91,8 @@ struct SettingsView: View {
                         .foregroundStyle(.orange)
                 }
             }
+
+            TerminalSettingsSection(manager: terminalManager)
 
             Section("iCloud 与数据") {
                 LabeledContent {
@@ -264,7 +267,7 @@ struct SettingsView: View {
     }
 }
 
-private struct SettingsPreferenceLabel: View {
+struct SettingsPreferenceLabel: View {
     let title: String
     let description: String
     let systemImage: String

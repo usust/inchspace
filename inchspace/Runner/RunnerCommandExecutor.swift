@@ -11,7 +11,8 @@ enum RunnerCommandExecutor {
         executable: String,
         arguments: [String],
         currentDirectory: URL? = nil,
-        environment: [String: String]? = nil
+        environment: [String: String]? = nil,
+        usesNullInput: Bool = false
     ) async throws -> RunnerCommandResult {
         try await Task.detached(priority: .utility) {
             let process = Process()
@@ -20,6 +21,7 @@ enum RunnerCommandExecutor {
             process.arguments = arguments
             process.currentDirectoryURL = currentDirectory
             if let environment { process.environment = environment }
+            if usesNullInput { process.standardInput = FileHandle.nullDevice }
             process.standardOutput = outputPipe
             process.standardError = outputPipe
             try process.run()

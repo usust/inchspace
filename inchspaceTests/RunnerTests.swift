@@ -16,7 +16,13 @@ final class RunnerTests: XCTestCase {
             port: 8080,
             isFavorite: true
         )
-        let server = RunnerServer(name: "Production", host: "10.0.0.2", username: "deploy", keyPath: "/tmp/id_ed25519")
+        let server = RunnerServer(
+            name: "Production",
+            host: "10.0.0.2",
+            username: "deploy",
+            authentication: .sshKey,
+            keyPath: "/tmp/id_ed25519"
+        )
         let service = RunnerManagedService(
             identifier: "actions.runner.example",
             displayName: "Example Runner",
@@ -37,6 +43,14 @@ final class RunnerTests: XCTestCase {
         XCTAssertEqual(loaded.servers, [server])
         XCTAssertEqual(loaded.managedServices, [service])
         try? FileManager.default.removeItem(at: fileURL)
+    }
+
+    func testLegacyServerConfigurationDefaultsToSSHKey() throws {
+        let json = """
+        {"name":"Legacy","host":"10.0.0.3","username":"root","port":22,"keyPath":"/tmp/id_rsa"}
+        """
+        let server = try JSONDecoder().decode(RunnerServer.self, from: Data(json.utf8))
+        XCTAssertEqual(server.authentication, .sshKey)
     }
 
     func testLaunchctlRowExtractsServiceIdentifier() {

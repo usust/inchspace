@@ -4,21 +4,18 @@ struct RunnerView: View {
     enum Page: String, CaseIterable, Identifiable {
         case dashboard
         case localServices
-        case servers
 
         var id: String { rawValue }
         var title: String {
             switch self {
             case .dashboard: "概览"
             case .localServices: "本机服务"
-            case .servers: "服务器"
             }
         }
         var symbol: String {
             switch self {
             case .dashboard: "square.grid.2x2"
             case .localServices: "desktopcomputer"
-            case .servers: "server.rack"
             }
         }
     }
@@ -46,8 +43,6 @@ struct RunnerView: View {
                         )
                     case .localServices:
                         RunnerLocalServicesView(store: store)
-                    case .servers:
-                        RunnerServersView(store: store)
                     }
                 }
             }

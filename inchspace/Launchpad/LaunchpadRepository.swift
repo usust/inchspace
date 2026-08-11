@@ -544,7 +544,7 @@ final class LaunchpadRepository: ObservableObject {
             localModifiedAt: localDate,
             allowsUpload: allowsUpload
         ) {
-            let repaired = Self.validated(remote)
+            let repaired = Self.validated(remote.restoringDeviceState(from: library))
             library = repaired
             do {
                 try persistence.save(repaired)

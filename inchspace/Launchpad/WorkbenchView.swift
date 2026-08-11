@@ -18,14 +18,13 @@ struct WorkbenchView: View {
     @State private var websiteRequest: WebsiteEditRequest?
     @State private var presentedError: PresentedError?
     @State private var currentCapacity = 24
+    @EnvironmentObject private var visibilityController: AppVisibilityController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
-                LaunchpadHeaderView(
-                    category: $category
-                )
+                LaunchpadHeaderView(category: $category)
                     .padding(.horizontal, 34)
                     .padding(.top, 26)
                     .padding(.bottom, 16)
@@ -211,8 +210,9 @@ struct WorkbenchView: View {
     private func open(_ item: LaunchItem) {
         Task {
             do {
-                try await LaunchpadOpenService.open(item)
+                let destination = try await LaunchpadOpenService.open(item)
                 repository.markOpened(itemID: item.id)
+                visibilityController.hideAfterSuccessfulOpen(destination)
             } catch {
                 repository.markUnavailable(itemID: item.id)
                 present(error)

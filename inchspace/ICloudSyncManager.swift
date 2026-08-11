@@ -31,9 +31,11 @@ final class ICloudSyncManager: ObservableObject {
         static let lastSuccessfulSync = "iCloudDriveLastSuccessfulSync"
     }
 
-    private static let fileName = "inchspace-workbench.json"
+    private static let workbenchFileName = "inchspace-workbench.json"
+    private static let settingsFileName = "inchspace-settings.json"
     private var folderBookmark: Data?
     private var pendingUpload: Task<Void, Never>?
+    private var pendingSettingsUpload: Task<Void, Never>?
     private var statusMonitor: Task<Void, Never>?
 
     init() {
@@ -56,6 +58,7 @@ final class ICloudSyncManager: ObservableObject {
 
     deinit {
         pendingUpload?.cancel()
+        pendingSettingsUpload?.cancel()
         statusMonitor?.cancel()
     }
 
@@ -143,7 +146,7 @@ final class ICloudSyncManager: ObservableObject {
             guard let snapshot = try readSnapshot() else {
                 if allowsUpload {
                     try write(localLibrary)
-                    beginStatusMonitoring()
+                    beginStatusMonitoring(fileName: Self.workbenchFileName)
                 } else {
                     status = .synced
                 }
@@ -162,7 +165,7 @@ final class ICloudSyncManager: ObservableObject {
 
             if allowsUpload, localModifiedAt > snapshot.modifiedAt {
                 try write(localLibrary)
-                beginStatusMonitoring()
+                beginStatusMonitoring(fileName: Self.workbenchFileName)
             } else {
                 await updateTransferStatus(for: try syncFileURL())
             }
@@ -182,7 +185,88 @@ final class ICloudSyncManager: ObservableObject {
             self.status = .syncing
             do {
                 try self.write(library)
-                self.beginStatusMonitoring()
+                self.beginStatusMonitoring(fileName: Self.workbenchFileName)
+            } catch is CancellationError {
+                return
+            } catch {
+                self.setError(error)
+            }
+        }
+    }
+
+    /// 对少量、可移植的应用偏好执行最后修改时间优先的双向同步。
+    func synchronizePreferences(
+        localPreferences: SyncedAppPreferences,
+        localModifiedAt: Date?,
+        allowsUpload: Bool
+    ) async -> SyncedPreferencesSnapshot? {
+        guard isEnabled, isConfigured else { return nil }
+        status = .syncing
+
+        do {
+            guard let remote = try readSettingsDocument() else {
+                guard allowsUpload else {
+                    status = .synced
+                    return nil
+                }
+                let document = SyncedPreferencesSnapshot(
+                    preferences: localPreferences,
+                    modifiedAt: localModifiedAt ?? Date()
+                )
+                try writeSettingsDocument(document)
+                beginStatusMonitoring(fileName: Self.settingsFileName)
+                return document
+            }
+
+            guard let localModifiedAt else {
+                markSuccessfulSync()
+                return remote
+            }
+
+            if remote.modifiedAt > localModifiedAt {
+                markSuccessfulSync()
+                return remote
+            }
+
+            if allowsUpload, localModifiedAt > remote.modifiedAt {
+                let document = SyncedPreferencesSnapshot(
+                    preferences: localPreferences,
+                    modifiedAt: localModifiedAt
+                )
+                try writeSettingsDocument(document)
+                beginStatusMonitoring(fileName: Self.settingsFileName)
+            } else {
+                await updateTransferStatus(for: try syncFileURL(fileName: Self.settingsFileName))
+            }
+            return nil
+        } catch {
+            setError(error)
+            return nil
+        }
+    }
+
+    func schedulePreferencesUpload(
+        _ preferences: SyncedAppPreferences,
+        modifiedAt: Date
+    ) {
+        guard isEnabled, isConfigured else { return }
+        pendingSettingsUpload?.cancel()
+        pendingSettingsUpload = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(800))
+            guard !Task.isCancelled, let self else { return }
+            self.status = .syncing
+            do {
+                if let remote = try self.readSettingsDocument(),
+                   remote.modifiedAt >= modifiedAt {
+                    self.markSuccessfulSync()
+                    return
+                }
+                let document = SyncedPreferencesSnapshot(
+                    preferences: preferences,
+                    modifiedAt: modifiedAt
+                )
+                try self.writeSettingsDocument(document)
+                self.beginStatusMonitoring(fileName: Self.settingsFileName)
             } catch is CancellationError {
                 return
             } catch {
@@ -192,9 +276,13 @@ final class ICloudSyncManager: ObservableObject {
     }
 
     private func syncFileURL() throws -> URL {
+        try syncFileURL(fileName: Self.workbenchFileName)
+    }
+
+    private func syncFileURL(fileName: String) throws -> URL {
         guard let bookmark = folderBookmark else { throw SyncError.notConfigured }
         return try SecurityScopedBookmarkService.resolve(bookmark)
-            .appendingPathComponent(Self.fileName, isDirectory: false)
+            .appendingPathComponent(fileName, isDirectory: false)
     }
 
     private func readSnapshot() throws -> FileSnapshot? {
@@ -203,7 +291,7 @@ final class ICloudSyncManager: ObservableObject {
             to: bookmark,
             fallbackURL: URL(fileURLWithPath: "/")
         ) { folderURL in
-            let fileURL = folderURL.appendingPathComponent(Self.fileName)
+            let fileURL = folderURL.appendingPathComponent(Self.workbenchFileName)
             guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
 
             var coordinationError: NSError?
@@ -236,12 +324,12 @@ final class ICloudSyncManager: ObservableObject {
 
     private func write(_ library: LaunchpadLibrary) throws {
         guard let bookmark = folderBookmark else { throw SyncError.notConfigured }
-        let data = try LaunchpadJSONCodec.encode(library)
+        let data = try LaunchpadJSONCodec.encode(library.cloudPortableCopy())
         try SecurityScopedBookmarkService.withAccess(
             to: bookmark,
             fallbackURL: URL(fileURLWithPath: "/")
         ) { folderURL in
-            let fileURL = folderURL.appendingPathComponent(Self.fileName)
+            let fileURL = folderURL.appendingPathComponent(Self.workbenchFileName)
             var coordinationError: NSError?
             var writeError: Error?
             NSFileCoordinator().coordinate(
@@ -260,10 +348,75 @@ final class ICloudSyncManager: ObservableObject {
         }
     }
 
-    private func beginStatusMonitoring() {
+    private func readSettingsDocument() throws -> SyncedPreferencesSnapshot? {
+        guard let bookmark = folderBookmark else { throw SyncError.notConfigured }
+        return try SecurityScopedBookmarkService.withAccess(
+            to: bookmark,
+            fallbackURL: URL(fileURLWithPath: "/")
+        ) { folderURL in
+            let fileURL = folderURL.appendingPathComponent(Self.settingsFileName)
+            guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+
+            var coordinationError: NSError?
+            var result: SyncedPreferencesSnapshot?
+            var readError: Error?
+            NSFileCoordinator().coordinate(readingItemAt: fileURL, options: [], error: &coordinationError) { url in
+                do {
+                    var candidates = [(url, Self.modificationDate(of: url))]
+                    for version in NSFileVersion.unresolvedConflictVersionsOfItem(at: url) ?? [] {
+                        candidates.append((version.url, version.modificationDate ?? .distantPast))
+                    }
+                    for (candidateURL, _) in candidates.sorted(by: { $0.1 > $1.1 }) {
+                        guard let data = try? Data(contentsOf: candidateURL),
+                              let document = try? LaunchpadJSONCodec.decode(
+                                SyncedPreferencesSnapshot.self,
+                                from: data
+                              ) else { continue }
+                        if result == nil || document.modifiedAt > result!.modifiedAt {
+                            result = document
+                        }
+                    }
+                    guard result != nil else { throw SyncError.invalidSettingsData }
+                } catch {
+                    readError = error
+                }
+            }
+            if let coordinationError { throw coordinationError }
+            if let readError { throw readError }
+            return result
+        }
+    }
+
+    private func writeSettingsDocument(_ document: SyncedPreferencesSnapshot) throws {
+        guard let bookmark = folderBookmark else { throw SyncError.notConfigured }
+        let data = try LaunchpadJSONCodec.encode(document)
+        try SecurityScopedBookmarkService.withAccess(
+            to: bookmark,
+            fallbackURL: URL(fileURLWithPath: "/")
+        ) { folderURL in
+            let fileURL = folderURL.appendingPathComponent(Self.settingsFileName)
+            var coordinationError: NSError?
+            var writeError: Error?
+            NSFileCoordinator().coordinate(
+                writingItemAt: fileURL,
+                options: .forReplacing,
+                error: &coordinationError
+            ) { url in
+                do {
+                    try data.write(to: url, options: .atomic)
+                } catch {
+                    writeError = error
+                }
+            }
+            if let coordinationError { throw coordinationError }
+            if let writeError { throw writeError }
+        }
+    }
+
+    private func beginStatusMonitoring(fileName: String) {
         statusMonitor?.cancel()
         statusMonitor = Task { [weak self] in
-            guard let self, let fileURL = try? self.syncFileURL() else { return }
+            guard let self, let fileURL = try? self.syncFileURL(fileName: fileName) else { return }
             for _ in 0..<12 {
                 guard !Task.isCancelled else { return }
                 await self.updateTransferStatus(for: fileURL)
@@ -313,8 +466,10 @@ final class ICloudSyncManager: ObservableObject {
 
     private func cancelPendingWork() {
         pendingUpload?.cancel()
+        pendingSettingsUpload?.cancel()
         statusMonitor?.cancel()
         pendingUpload = nil
+        pendingSettingsUpload = nil
         statusMonitor = nil
     }
 
@@ -323,11 +478,49 @@ final class ICloudSyncManager: ObservableObject {
         let modifiedAt: Date
     }
 
+    struct SyncedPreferencesSnapshot: Codable, Equatable {
+        var schemaVersion = 1
+        let preferences: SyncedAppPreferences
+        let modifiedAt: Date
+
+        private enum CodingKeys: String, CodingKey {
+            case schemaVersion
+            case preferences
+            case modifiedAt
+        }
+
+        init(preferences: SyncedAppPreferences, modifiedAt: Date) {
+            self.preferences = preferences
+            self.modifiedAt = modifiedAt
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            schemaVersion = try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 0
+            preferences = try container.decode(SyncedAppPreferences.self, forKey: .preferences)
+            if let timestamp = try? container.decode(Double.self, forKey: .modifiedAt) {
+                modifiedAt = Date(timeIntervalSince1970: timestamp)
+            } else {
+                // 兼容曾使用 JSONEncoder.iso8601 写出的预发布设置文件。
+                modifiedAt = try container.decode(Date.self, forKey: .modifiedAt)
+            }
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(schemaVersion, forKey: .schemaVersion)
+            try container.encode(preferences, forKey: .preferences)
+            // ISO-8601 编码会丢失亚秒精度，可能让快速连续修改发生错误覆盖。
+            try container.encode(modifiedAt.timeIntervalSince1970, forKey: .modifiedAt)
+        }
+    }
+
     private enum SyncError: LocalizedError {
         case notConfigured
         case notDirectory
         case notICloudDrive
         case invalidCloudData
+        case invalidSettingsData
         case folderAccessFailed(String)
 
         var errorDescription: String? {
@@ -336,6 +529,7 @@ final class ICloudSyncManager: ObservableObject {
             case .notDirectory: "请选择一个文件夹。"
             case .notICloudDrive: "请选择 iCloud Drive 中的文件夹。"
             case .invalidCloudData: "iCloud Drive 中的工作台数据无法读取。"
+            case .invalidSettingsData: "iCloud Drive 中的设置数据无法读取。"
             case let .folderAccessFailed(message): "无法访问所选文件夹：\(message)"
             }
         }

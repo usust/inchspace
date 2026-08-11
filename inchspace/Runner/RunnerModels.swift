@@ -135,6 +135,20 @@ struct RunnerManagedService: Codable, Identifiable, Hashable, Sendable {
     var isSystemService = false
 }
 
+enum RunnerServerAuthentication: String, Codable, CaseIterable, Identifiable, Sendable {
+    case password
+    case sshKey
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .password: "密码"
+        case .sshKey: "SSH Key"
+        }
+    }
+}
+
 enum RunnerServiceIdentifierParser {
     nonisolated static func parse(_ input: String) -> String? {
         let identifier = input
@@ -152,8 +166,46 @@ struct RunnerServer: Codable, Identifiable, Hashable, Sendable {
     var host: String
     var username: String
     var port: Int = 22
-    var keyPath: String
+    var authentication: RunnerServerAuthentication = .password
+    var keyPath: String = ""
     var keyBookmark: Data?
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        host: String,
+        username: String,
+        port: Int = 22,
+        authentication: RunnerServerAuthentication = .password,
+        keyPath: String = "",
+        keyBookmark: Data? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.host = host
+        self.username = username
+        self.port = port
+        self.authentication = authentication
+        self.keyPath = keyPath
+        self.keyBookmark = keyBookmark
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, host, username, port, authentication, keyPath, keyBookmark
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try container.decode(String.self, forKey: .name)
+        host = try container.decode(String.self, forKey: .host)
+        username = try container.decode(String.self, forKey: .username)
+        port = try container.decodeIfPresent(Int.self, forKey: .port) ?? 22
+        keyPath = try container.decodeIfPresent(String.self, forKey: .keyPath) ?? ""
+        keyBookmark = try container.decodeIfPresent(Data.self, forKey: .keyBookmark)
+        // Configurations created before password support only offered SSH keys.
+        authentication = try container.decodeIfPresent(RunnerServerAuthentication.self, forKey: .authentication) ?? .sshKey
+    }
 }
 
 struct RunnerDiscovery: Identifiable, Hashable, Sendable {
@@ -209,7 +261,7 @@ enum RunnerError: LocalizedError {
         case .invalidTask: "请填写任务名称、运行内容和工作目录。"
         case let .processFailed(message): message.isEmpty ? "操作没有成功完成。" : message
         case .accessExpired: "文件访问授权已失效，请重新选择位置。"
-        case .serverConfiguration: "请填写服务器名称、地址、用户名并选择 SSH 密钥。"
+        case .serverConfiguration: "请填写服务器名称、地址、用户名和认证信息。"
         }
     }
 }

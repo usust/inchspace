@@ -24,6 +24,18 @@ struct AppSidebar: View {
                         sidebarRow(for: destination)
                     }
                 }
+
+                Section("运行") {
+                    ForEach(SidebarDestination.runtimeItems) { destination in
+                        sidebarRow(for: destination)
+                    }
+                }
+
+                Section("管理") {
+                    ForEach(SidebarDestination.managementItems) { destination in
+                        sidebarRow(for: destination)
+                    }
+                }
             }
             .listStyle(.sidebar)
 

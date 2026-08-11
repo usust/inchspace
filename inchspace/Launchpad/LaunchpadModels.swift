@@ -233,6 +233,33 @@ struct LaunchpadLibrary: Codable, Equatable {
     }
 }
 
+extension LaunchpadLibrary {
+    /// 云端只保存可移植的数据；沙盒授权和可用性判断都属于当前设备。
+    func cloudPortableCopy() -> LaunchpadLibrary {
+        var copy = self
+        copy.selectedPages = [:]
+        for index in copy.items.indices {
+            copy.items[index].bookmarkData = nil
+            copy.items[index].isAvailable = true
+        }
+        return copy
+    }
+
+    /// 云端布局覆盖本地布局时，恢复仍与同一目标匹配的本机授权和状态。
+    func restoringDeviceState(from local: LaunchpadLibrary) -> LaunchpadLibrary {
+        let localItems = Dictionary(uniqueKeysWithValues: local.items.map { ($0.id, $0) })
+        var copy = cloudPortableCopy()
+        copy.selectedPages = local.selectedPages
+        for index in copy.items.indices {
+            guard let localItem = localItems[copy.items[index].id],
+                  localItem.target == copy.items[index].target else { continue }
+            copy.items[index].bookmarkData = localItem.bookmarkData
+            copy.items[index].isAvailable = localItem.isAvailable
+        }
+        return copy
+    }
+}
+
 struct LaunchDragState: Equatable {
     enum Phase: Equatable {
         case idle

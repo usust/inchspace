@@ -241,6 +241,7 @@ final class RunnerStore: ObservableObject {
     }
 
     func deleteServer(_ id: UUID) {
+        RunnerServerCredentialStore.deletePassword(for: id)
         servers.removeAll { $0.id == id }
         remoteServices[id] = nil
         save()

@@ -6,6 +6,7 @@
 //
 //  应用根视图：组织可折叠侧栏和空白详情区。
 
+import Combine
 import SwiftUI
 
 struct ContentView: View {
@@ -13,8 +14,10 @@ struct ContentView: View {
     @StateObject private var syncManager: ICloudSyncManager
     @StateObject private var repository: LaunchpadRepository
     @StateObject private var runnerStore: RunnerStore
+    @StateObject private var serverManager: ServerManager
     @State private var selection: SidebarDestination? = .workspace
     @Environment(\.scenePhase) private var scenePhase
+    @EnvironmentObject private var visibilityController: AppVisibilityController
 
     init(updateManager: UpdateManager) {
         self.updateManager = updateManager
@@ -22,6 +25,7 @@ struct ContentView: View {
         _syncManager = StateObject(wrappedValue: syncManager)
         _repository = StateObject(wrappedValue: LaunchpadRepository(syncManager: syncManager))
         _runnerStore = StateObject(wrappedValue: RunnerStore())
+        _serverManager = StateObject(wrappedValue: ServerManager())
     }
 
     var body: some View {
@@ -31,13 +35,28 @@ struct ContentView: View {
             detailView
         }
         .navigationSplitViewStyle(.balanced)
+        .onReceive(NotificationCenter.default.publisher(for: .inchspaceOpenSettings)) { _ in
+            selection = .settings
+        }
         .task {
             await repository.startCloudSync()
         }
+        .task {
+            await synchronizePreferences(allowsUpload: true)
+        }
         .task { await runnerStore.bootstrap() }
+        .onReceive(visibilityController.preferences.$syncedModifiedAt.dropFirst().compactMap { $0 }) { date in
+            syncManager.schedulePreferencesUpload(
+                visibilityController.preferences.syncedPreferences,
+                modifiedAt: date
+            )
+        }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
-                Task { await repository.refreshCloudData() }
+                Task {
+                    await repository.refreshCloudData()
+                    await synchronizePreferences(allowsUpload: false)
+                }
             } else {
                 repository.saveImmediately()
             }
@@ -54,6 +73,8 @@ struct ContentView: View {
             AppRepairView()
         case .runner:
             RunnerView(store: runnerStore)
+        case .servers:
+            ServerManagerView(manager: serverManager)
         case .text, .image, .conversion, .developer:
             ContentUnavailableView(
                 destination.title,
@@ -62,14 +83,34 @@ struct ContentView: View {
             )
         case .settings:
             SettingsView(syncManager: syncManager, updateManager: updateManager) {
-                Task { await repository.startCloudSync() }
+                Task {
+                    await repository.startCloudSync()
+                    await synchronizePreferences(allowsUpload: true)
+                }
             }
+        }
+    }
+
+    private func synchronizePreferences(allowsUpload: Bool) async {
+        let preferences = visibilityController.preferences
+        if let snapshot = await syncManager.synchronizePreferences(
+            localPreferences: preferences.syncedPreferences,
+            localModifiedAt: preferences.syncedModifiedAt,
+            allowsUpload: allowsUpload
+        ) {
+            preferences.applySyncedPreferences(
+                snapshot.preferences,
+                modifiedAt: snapshot.modifiedAt
+            )
         }
     }
 }
 
 #if DEBUG
 struct ContentView_Previews: PreviewProvider {
-    static var previews: some View { ContentView(updateManager: UpdateManager()) }
+    static var previews: some View {
+        ContentView(updateManager: UpdateManager())
+            .environmentObject(AppVisibilityController.shared)
+    }
 }
 #endif

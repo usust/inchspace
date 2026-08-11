@@ -172,7 +172,8 @@ private struct RemotePendingAction: Identifiable {
 
 private struct RunnerServerEditor: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var server = RunnerServer(name: "", host: "", username: "", keyPath: "")
+    @State private var server = RunnerServer(name: "", host: "", username: "")
+    @State private var password = ""
     @State private var errorMessage: String?
     let onSave: (RunnerServer) -> Void
 
@@ -190,11 +191,21 @@ private struct RunnerServerEditor: View {
                 TextField("地址", text: $server.host, prompt: Text("192.168.1.100"))
                 TextField("用户名", text: $server.username, prompt: Text("root"))
                 TextField("端口", value: $server.port, format: .number)
-                LabeledContent("认证") {
-                    HStack {
-                        Text(server.keyPath.isEmpty ? "尚未选择 SSH Key" : URL(fileURLWithPath: server.keyPath).lastPathComponent)
-                            .foregroundStyle(server.keyPath.isEmpty ? .secondary : .primary)
-                        Button("选择…", action: selectKey)
+                Picker("认证方式", selection: $server.authentication) {
+                    ForEach(RunnerServerAuthentication.allCases) { method in
+                        Text(method.title).tag(method)
+                    }
+                }
+                .pickerStyle(.segmented)
+                if server.authentication == .password {
+                    SecureField("密码", text: $password, prompt: Text("服务器登录密码"))
+                } else {
+                    LabeledContent("SSH Key") {
+                        HStack {
+                            Text(server.keyPath.isEmpty ? "尚未选择" : URL(fileURLWithPath: server.keyPath).lastPathComponent)
+                                .foregroundStyle(server.keyPath.isEmpty ? .secondary : .primary)
+                            Button("选择…", action: selectKey)
+                        }
                     }
                 }
                 if let errorMessage { Label(errorMessage, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red) }
@@ -220,10 +231,19 @@ private struct RunnerServerEditor: View {
     }
 
     private func save() {
-        guard !server.name.isEmpty, !server.host.isEmpty, !server.username.isEmpty, !server.keyPath.isEmpty, (1...65535).contains(server.port) else {
+        let hasAuthentication = server.authentication == .password ? !password.isEmpty : !server.keyPath.isEmpty
+        guard !server.name.isEmpty, !server.host.isEmpty, !server.username.isEmpty, hasAuthentication, (1...65535).contains(server.port) else {
             errorMessage = RunnerError.serverConfiguration.localizedDescription
             return
         }
-        onSave(server); dismiss()
+        do {
+            if server.authentication == .password {
+                try RunnerServerCredentialStore.savePassword(password, for: server.id)
+            }
+            onSave(server)
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }

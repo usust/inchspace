@@ -8,6 +8,20 @@ import Foundation
 
 @MainActor
 enum LaunchpadOpenService {
+    /// 打开成功后保留目标应用身份，供窗口协调器隐藏自身后恢复前台焦点。
+    struct OpenedDestination {
+        let runningApplication: NSRunningApplication?
+        let bundleIdentifier: String?
+
+        func activate() {
+            let application = runningApplication
+                ?? bundleIdentifier.flatMap {
+                    NSRunningApplication.runningApplications(withBundleIdentifier: $0).first
+                }
+            application?.activate(options: [.activateAllWindows])
+        }
+    }
+
     enum OpenError: LocalizedError {
         case applicationUnavailable
         case directoryUnavailable
@@ -24,7 +38,7 @@ enum LaunchpadOpenService {
         }
     }
 
-    static func open(_ item: LaunchItem) async throws {
+    static func open(_ item: LaunchItem) async throws -> OpenedDestination {
         switch item.target {
         case let .application(bundleIdentifier, path):
             let applicationURL = try resolveApplicationURL(
@@ -36,7 +50,11 @@ enum LaunchpadOpenService {
             defer {
                 if didStart { applicationURL.stopAccessingSecurityScopedResource() }
             }
-            try await openApplication(at: applicationURL)
+            let application = try await openApplication(at: applicationURL)
+            return OpenedDestination(
+                runningApplication: application,
+                bundleIdentifier: application.bundleIdentifier ?? bundleIdentifier
+            )
 
         case let .directory(path):
             let fallbackURL = URL(fileURLWithPath: path, isDirectory: true)
@@ -50,14 +68,26 @@ enum LaunchpadOpenService {
                 return NSWorkspace.shared.open(url)
             }
             guard didOpen else { throw OpenError.directoryUnavailable }
+            return OpenedDestination(
+                runningApplication: nil,
+                bundleIdentifier: "com.apple.finder"
+            )
 
         case let .website(rawURL):
             guard let url = normalizedWebsiteURL(from: rawURL) else {
                 throw OpenError.invalidWebsite
             }
+            let browserURL = NSWorkspace.shared.urlForApplication(toOpen: url)
+            let browserBundleIdentifier = browserURL
+                .flatMap(Bundle.init(url:))?
+                .bundleIdentifier
             guard NSWorkspace.shared.open(url) else {
                 throw OpenError.openFailed(url.absoluteString)
             }
+            return OpenedDestination(
+                runningApplication: nil,
+                bundleIdentifier: browserBundleIdentifier
+            )
         }
     }
 
@@ -123,16 +153,18 @@ enum LaunchpadOpenService {
         throw OpenError.applicationUnavailable
     }
 
-    private static func openApplication(at url: URL) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+    private static func openApplication(at url: URL) async throws -> NSRunningApplication {
+        try await withCheckedThrowingContinuation { continuation in
             NSWorkspace.shared.openApplication(
                 at: url,
                 configuration: NSWorkspace.OpenConfiguration()
-            ) { _, error in
+            ) { application, error in
                 if let error {
                     continuation.resume(throwing: OpenError.openFailed(error.localizedDescription))
+                } else if let application {
+                    continuation.resume(returning: application)
                 } else {
-                    continuation.resume(returning: ())
+                    continuation.resume(throwing: OpenError.applicationUnavailable)
                 }
             }
         }

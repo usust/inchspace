@@ -236,26 +236,55 @@ struct SystemdRunnerServiceManager: RunnerServiceManaging {
     }
 
     private func ssh(_ remoteArguments: [String]) async throws -> RunnerCommandResult {
-        let keyURL = try server.keyBookmark.map(SecurityScopedBookmarkService.resolve)
-            ?? URL(fileURLWithPath: server.keyPath)
-        let didStart = keyURL.startAccessingSecurityScopedResource()
-        defer { if didStart { keyURL.stopAccessingSecurityScopedResource() } }
         let supportDirectory = (FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory)
             .appendingPathComponent("vip.lylab.inchspace", isDirectory: true)
         try FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
         let knownHostsPath = supportDirectory.appendingPathComponent("runner-known-hosts").path
-        let args = [
-            "-o", "BatchMode=yes",
+        var args = [
             "-o", "ConnectTimeout=8",
             "-o", "StrictHostKeyChecking=accept-new",
             "-o", "UserKnownHostsFile=\(knownHostsPath)",
-            "-o", "UseKeychain=yes",
-            "-o", "AddKeysToAgent=yes",
-            "-p", String(server.port),
-            "-i", keyURL.path,
-            "\(server.username)@\(server.host)"
-        ] + remoteArguments
-        return try await RunnerCommandExecutor.run(executable: "/usr/bin/ssh", arguments: args)
+        ]
+        var environment: [String: String]?
+        var scopedKeyURL: URL?
+        var didStartKeyAccess = false
+
+        switch server.authentication {
+        case .password:
+            let password = try RunnerServerCredentialStore.password(for: server.id)
+            let askPassURL = supportDirectory.appendingPathComponent("runner-ssh-askpass")
+            let script = "#!/bin/sh\nprintf '%s\\n' \"$INCHSPACE_SSH_PASSWORD\"\n"
+            try Data(script.utf8).write(to: askPassURL, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: askPassURL.path)
+            environment = ProcessInfo.processInfo.environment.merging([
+                "SSH_ASKPASS": askPassURL.path,
+                "SSH_ASKPASS_REQUIRE": "force",
+                "DISPLAY": "inchspace",
+                "INCHSPACE_SSH_PASSWORD": password
+            ]) { _, new in new }
+            args += [
+                "-o", "BatchMode=no",
+                "-o", "PreferredAuthentications=password,keyboard-interactive",
+                "-o", "PubkeyAuthentication=no",
+                "-o", "NumberOfPasswordPrompts=1"
+            ]
+        case .sshKey:
+            let keyURL = try server.keyBookmark.map(SecurityScopedBookmarkService.resolve)
+                ?? URL(fileURLWithPath: server.keyPath)
+            scopedKeyURL = keyURL
+            didStartKeyAccess = keyURL.startAccessingSecurityScopedResource()
+            args += [
+                "-o", "BatchMode=yes",
+                "-o", "UseKeychain=yes",
+                "-o", "AddKeysToAgent=yes",
+                "-i", keyURL.path
+            ]
+        }
+        defer {
+            if didStartKeyAccess { scopedKeyURL?.stopAccessingSecurityScopedResource() }
+        }
+        args += ["-p", String(server.port), "\(server.username)@\(server.host)"] + remoteArguments
+        return try await RunnerCommandExecutor.run(executable: "/usr/bin/ssh", arguments: args, environment: environment)
     }
 }

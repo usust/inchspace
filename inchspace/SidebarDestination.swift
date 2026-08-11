@@ -13,6 +13,7 @@ enum SidebarDestination: String, Identifiable {
     case conversion
     case developer
     case runner
+    case servers
     case appRepair
     case settings
 
@@ -26,6 +27,7 @@ enum SidebarDestination: String, Identifiable {
         case .conversion: "格式转换"
         case .developer: "开发工具"
         case .runner: "运行中心"
+        case .servers: "服务器"
         case .appRepair: "应用修复"
         case .settings: "设置"
         }
@@ -39,6 +41,7 @@ enum SidebarDestination: String, Identifiable {
         case .conversion: "arrow.left.arrow.right"
         case .developer: "chevron.left.forwardslash.chevron.right"
         case .runner: "play.circle"
+        case .servers: "server.rack"
         case .appRepair: "wrench.and.screwdriver"
         case .settings: "gearshape"
         }
@@ -53,7 +56,14 @@ enum SidebarDestination: String, Identifiable {
         .image,
         .conversion,
         .developer,
-        .runner,
         .appRepair,
+    ]
+
+    static let runtimeItems: [SidebarDestination] = [
+        .runner,
+    ]
+
+    static let managementItems: [SidebarDestination] = [
+        .servers,
     ]
 }

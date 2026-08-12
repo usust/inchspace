@@ -13,7 +13,7 @@ final class LaunchpadLayoutEngineTests: XCTestCase {
         let coordinator = LaunchpadDragCoordinator(longPressDuration: 0.01)
         let entryID = UUID()
         coordinator.beginPress(entryID: entryID, location: .zero)
-        try await Task.sleep(for: .milliseconds(20))
+        try await waitUntil { coordinator.state.phase == .editing }
         coordinator.beginDrag(
             entryID: entryID,
             pageIndex: 0,
@@ -174,7 +174,7 @@ final class LaunchpadLayoutEngineTests: XCTestCase {
         let id = UUID()
         coordinator.beginPress(entryID: id, location: .zero)
 
-        try await Task.sleep(for: .seconds(LaunchpadInteractionConstants.longPressDuration + 0.1))
+        try await waitUntil { coordinator.state.phase == .editing }
         XCTAssertEqual(coordinator.state.phase, .editing)
         XCTAssertFalse(coordinator.finishPress(entryID: id))
         XCTAssertEqual(coordinator.state.phase, .editing)

@@ -240,6 +240,36 @@ final class TerminalManagerTests: XCTestCase {
         XCTAssertEqual(systemDarkBackground, darkBackground)
     }
 
+    func testTerminalThemeDefaultsToFollowingSystemAppearance() {
+        let (preferences, suiteName) = makePreferences()
+        defer { UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName) }
+
+        XCTAssertEqual(preferences.theme, .system)
+    }
+
+    func testLegacyMacOSDarkDefaultMigratesToFollowingSystemAppearance() {
+        let suiteName = "inchspace-tests-terminal-migration-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.set(TerminalThemePreference.macOSDark.rawValue, forKey: "terminal.preferences.theme")
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let preferences = TerminalPreferences(defaults: defaults)
+
+        XCTAssertEqual(preferences.theme, .system)
+        XCTAssertEqual(defaults.string(forKey: "terminal.preferences.theme"), TerminalThemePreference.system.rawValue)
+    }
+
+    func testMigrationPreservesAnExplicitNamedTerminalTheme() {
+        let suiteName = "inchspace-tests-terminal-migration-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.set(TerminalThemePreference.dracula.rawValue, forKey: "terminal.preferences.theme")
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let preferences = TerminalPreferences(defaults: defaults)
+
+        XCTAssertEqual(preferences.theme, .dracula)
+    }
+
     private func makePreferences() -> (TerminalPreferences, String) {
         let suiteName = "inchspace-tests-terminal-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!

@@ -47,27 +47,27 @@ enum TerminalSplitOrientation: String, CaseIterable, Identifiable {
 }
 
 enum TerminalThemePreference: String, CaseIterable, Identifiable {
+    case system
     case macOSDark
     case dracula
     case oneDark
     case solarizedDark
     case catppuccinMocha
     case custom
-    // Kept for existing installations. New installations default to macOS Dark.
-    case system
+    // Kept for existing installations and explicit fixed-theme choices.
     case light
     case dark
 
     var id: String { rawValue }
     var title: String {
         switch self {
+        case .system: "跟随系统"
         case .macOSDark: "macOS Dark"
         case .dracula: "Dracula"
         case .oneDark: "One Dark"
         case .solarizedDark: "Solarized Dark"
         case .catppuccinMocha: "Catppuccin Mocha"
         case .custom: "自定义"
-        case .system: "跟随系统"
         case .light: "浅色"
         case .dark: "经典深色"
         }
@@ -156,6 +156,7 @@ final class TerminalPreferences: ObservableObject {
         static let cursorShape = prefix + "cursorShape"
         static let cursorBlinks = prefix + "cursorBlinks"
         static let theme = prefix + "theme"
+        static let systemThemeMigration = prefix + "systemThemeMigration"
         static let customBackground = prefix + "customBackground"
         static let customForeground = prefix + "customForeground"
         static let customCursor = prefix + "customCursor"
@@ -186,7 +187,19 @@ final class TerminalPreferences: ObservableObject {
         lineHeight = storedLineHeight == 0 ? 1.12 : min(max(storedLineHeight, 1.0), 1.5)
         cursorShape = TerminalCursorShape(rawValue: defaults.string(forKey: Key.cursorShape) ?? "") ?? .block
         cursorBlinks = defaults.object(forKey: Key.cursorBlinks) as? Bool ?? true
-        theme = TerminalThemePreference(rawValue: defaults.string(forKey: Key.theme) ?? "") ?? .macOSDark
+        let storedTheme = TerminalThemePreference(rawValue: defaults.string(forKey: Key.theme) ?? "")
+        if !defaults.bool(forKey: Key.systemThemeMigration) {
+            // macOS Dark was the original implicit default. Migrate that legacy
+            // value once now that terminal surfaces follow the app appearance.
+            let migratedTheme: TerminalThemePreference = storedTheme == .macOSDark
+                ? .system
+                : (storedTheme ?? .system)
+            theme = migratedTheme
+            defaults.set(migratedTheme.rawValue, forKey: Key.theme)
+            defaults.set(true, forKey: Key.systemThemeMigration)
+        } else {
+            theme = storedTheme ?? .system
+        }
         customBackgroundColor = defaults.string(forKey: Key.customBackground) ?? "#1E1E1E"
         customForegroundColor = defaults.string(forKey: Key.customForeground) ?? "#E6E6E6"
         customCursorColor = defaults.string(forKey: Key.customCursor) ?? "#0A84FF"

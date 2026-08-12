@@ -145,7 +145,7 @@ struct TerminalSettingsSection: View {
             } label: {
                 SettingsPreferenceLabel(
                     title: "外观",
-                    description: "macOS Dark、Dracula、One Dark、Solarized 与 Catppuccin",
+                    description: "默认跟随系统，也可选择固定的亮色、深色或自定义主题",
                     systemImage: "circle.lefthalf.filled"
                 )
             }

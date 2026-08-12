@@ -17,6 +17,7 @@ struct WorkbenchView: View {
     @State private var renameRequest: RenameRequest?
     @State private var websiteRequest: WebsiteEditRequest?
     @State private var presentedError: PresentedError?
+    @State private var applicationOpenPanel: NSOpenPanel?
     @State private var currentCapacity = 24
     @EnvironmentObject private var visibilityController: AppVisibilityController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -125,7 +126,10 @@ struct WorkbenchView: View {
     }
 
     private func chooseApplications() {
-        let panel = NSOpenPanel()
+        // Reuse the panel so AppKit keeps the browser's icon presentation between
+        // consecutive additions instead of rebuilding it with a different view mode.
+        let panel = applicationOpenPanel ?? NSOpenPanel()
+        applicationOpenPanel = panel
         panel.title = "添加程序"
         panel.prompt = "添加"
         panel.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)

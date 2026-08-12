@@ -29,6 +29,7 @@ final class LaunchpadRepository: ObservableObject {
 
     private let persistence: LaunchpadPersistenceService
     private let syncManager: ICloudSyncManager?
+    private var hasReadableLocalData = true
     private var interactiveSnapshot: LaunchpadLibrary?
     private var pendingSaveTask: Task<Void, Never>?
 
@@ -41,10 +42,10 @@ final class LaunchpadRepository: ObservableObject {
         self.syncManager = syncManager
         do {
             let loaded = try persistence.load()
-            let source = loaded ?? Self.defaultLibrary()
+            let source = loaded.map(Self.removingLegacyDefaultContent) ?? LaunchpadLibrary()
             let repaired = Self.validated(source)
             library = repaired
-            if loaded != nil, source.version != LaunchpadLibrary.currentVersion || source != repaired {
+            if let loaded, loaded != repaired {
                 do {
                     try persistence.save(repaired)
                 } catch {
@@ -52,8 +53,9 @@ final class LaunchpadRepository: ObservableObject {
                 }
             }
         } catch {
-            library = Self.defaultLibrary()
-            persistenceError = "布局读取失败，已恢复默认内容：\(error.localizedDescription)"
+            library = LaunchpadLibrary()
+            hasReadableLocalData = false
+            persistenceError = "布局读取失败，已显示空白启动台：\(error.localizedDescription)"
         }
     }
 
@@ -455,6 +457,7 @@ final class LaunchpadRepository: ObservableObject {
         do {
             // 若应用在拖动中暂时失活，只保存拖动前快照，避免半完成布局落盘。
             try persistence.save(interactiveSnapshot ?? library)
+            hasReadableLocalData = true
             persistenceError = nil
             syncManager?.scheduleUpload(interactiveSnapshot ?? library)
         } catch {
@@ -538,16 +541,18 @@ final class LaunchpadRepository: ObservableObject {
     }
 
     private func synchronizeWithCloud(allowsUpload: Bool) async {
-        let localDate = persistence.modificationDate
+        let localDate = hasReadableLocalData ? persistence.modificationDate : nil
         if let remote = await syncManager?.synchronize(
             localLibrary: library,
             localModifiedAt: localDate,
-            allowsUpload: allowsUpload
+            allowsUpload: allowsUpload && hasReadableLocalData
         ) {
-            let repaired = Self.validated(remote.restoringDeviceState(from: library))
+            let migratedRemote = Self.removingLegacyDefaultContent(remote)
+            let repaired = Self.validated(migratedRemote.restoringDeviceState(from: library))
             library = repaired
             do {
                 try persistence.save(repaired)
+                hasReadableLocalData = true
                 persistenceError = nil
             } catch {
                 persistenceError = "iCloud 数据已获取，但暂时无法保存到本机：\(error.localizedDescription)"
@@ -622,24 +627,39 @@ final class LaunchpadRepository: ObservableObject {
         return result
     }
 
-    private static func defaultLibrary() -> LaunchpadLibrary {
-        let applications: [(String, String)] = [
-            ("Safari", "com.apple.Safari"),
-            ("备忘录", "com.apple.Notes"),
-            ("日历", "com.apple.iCal"),
-            ("文本编辑", "com.apple.TextEdit"),
-            ("预览", "com.apple.Preview"),
-            ("系统设置", "com.apple.systempreferences"),
-            ("App Store", "com.apple.AppStore"),
+    /// Early versions inserted these shortcuts when no data could be loaded.
+    /// Remove only an exact untouched copy so user-created libraries are never
+    /// mistaken for placeholder content.
+    private static func removingLegacyDefaultContent(
+        _ source: LaunchpadLibrary
+    ) -> LaunchpadLibrary {
+        let legacyBundleIdentifiers = [
+            "com.apple.Safari",
+            "com.apple.Notes",
+            "com.apple.iCal",
+            "com.apple.TextEdit",
+            "com.apple.Preview",
+            "com.apple.systempreferences",
+            "com.apple.AppStore",
         ]
-        let items = applications.enumerated().map { index, app in
-            LaunchItem(
-                name: app.0,
-                category: .application,
-                target: .application(bundleIdentifier: app.1, path: nil),
-                orderIndex: index
-            )
+        guard source.groups.isEmpty,
+              source.items.count == legacyBundleIdentifiers.count else { return source }
+
+        let sortedItems = source.items.sorted {
+            if $0.pageIndex != $1.pageIndex { return $0.pageIndex < $1.pageIndex }
+            return $0.orderIndex < $1.orderIndex
         }
-        return LaunchpadLibrary(items: items)
+        for (index, item) in sortedItems.enumerated() {
+            guard item.category == .application,
+                  item.pageIndex == 0,
+                  item.orderIndex == index,
+                  item.iconReference == nil,
+                  item.bookmarkData == nil,
+                  case let .application(bundleIdentifier, path) = item.target,
+                  bundleIdentifier == legacyBundleIdentifiers[index],
+                  path == nil else { return source }
+        }
+        return LaunchpadLibrary()
     }
+
 }

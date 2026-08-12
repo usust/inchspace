@@ -28,29 +28,50 @@ final class ICloudSyncManager: ObservableObject {
     private enum Key {
         static let enabled = "iCloudDriveSyncEnabled"
         static let bookmark = "iCloudDriveSyncFolderBookmark"
+        static let locationBookmark = "iCloudDriveSyncFolderLocationBookmark"
         static let lastSuccessfulSync = "iCloudDriveLastSuccessfulSync"
     }
 
     private static let workbenchFileName = "inchspace-workbench.json"
     private static let settingsFileName = "inchspace-settings.json"
+    private let defaults: UserDefaults
     private var folderBookmark: Data?
+    private var folderLocationBookmark: Data?
     private var pendingUpload: Task<Void, Never>?
     private var pendingSettingsUpload: Task<Void, Never>?
     private var statusMonitor: Task<Void, Never>?
 
-    init() {
-        let defaults = UserDefaults.standard
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         let storedEnabled = defaults.object(forKey: Key.enabled) as? Bool ?? true
+        let storedBookmark = defaults.data(forKey: Key.bookmark)
+        let storedLocationBookmark = defaults.data(forKey: Key.locationBookmark)
         isEnabled = storedEnabled
         lastSuccessfulSync = defaults.object(forKey: Key.lastSuccessfulSync) as? Date
-        folderBookmark = defaults.data(forKey: Key.bookmark)
 
-        if let bookmark = folderBookmark,
-           let url = try? SecurityScopedBookmarkService.resolve(bookmark) {
+        if let url = Self.resolveStoredFolderURL(
+            bookmark: storedBookmark,
+            locationBookmark: storedLocationBookmark
+        ) {
+            let didStartAccessing = url.startAccessingSecurityScopedResource()
+            folderBookmark = Self.usableSecurityBookmark(storedBookmark)
+                ?? (try? SecurityScopedBookmarkService.makeWritableBookmark(for: url))
+            folderLocationBookmark = (try? SecurityScopedBookmarkService.makeLocationBookmark(for: url))
+                ?? storedLocationBookmark
+            if didStartAccessing {
+                url.stopAccessingSecurityScopedResource()
+            }
+            if let folderBookmark {
+                defaults.set(folderBookmark, forKey: Key.bookmark)
+            }
+            if let folderLocationBookmark {
+                defaults.set(folderLocationBookmark, forKey: Key.locationBookmark)
+            }
             selectedFolderName = url.lastPathComponent
             status = storedEnabled ? .syncing : .disabled
         } else {
             folderBookmark = nil
+            folderLocationBookmark = nil
             selectedFolderName = nil
             status = .notConfigured
         }
@@ -62,7 +83,7 @@ final class ICloudSyncManager: ObservableObject {
         statusMonitor?.cancel()
     }
 
-    var isConfigured: Bool { folderBookmark != nil }
+    var isConfigured: Bool { folderBookmark != nil || folderLocationBookmark != nil }
 
     func configureFolder(_ url: URL) throws {
         let didStartAccessing = url.startAccessingSecurityScopedResource()
@@ -71,11 +92,13 @@ final class ICloudSyncManager: ObservableObject {
         }
 
         let bookmark: Data
+        let locationBookmark: Data
         do {
             let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isUbiquitousItemKey])
             guard values.isDirectory == true else { throw SyncError.notDirectory }
             guard values.isUbiquitousItem == true else { throw SyncError.notICloudDrive }
             bookmark = try SecurityScopedBookmarkService.makeWritableBookmark(for: url)
+            locationBookmark = try SecurityScopedBookmarkService.makeLocationBookmark(for: url)
         } catch let error as SyncError {
             throw error
         } catch {
@@ -84,10 +107,11 @@ final class ICloudSyncManager: ObservableObject {
 
         cancelPendingWork()
         folderBookmark = bookmark
+        folderLocationBookmark = locationBookmark
         selectedFolderName = url.lastPathComponent
         isEnabled = true
-        let defaults = UserDefaults.standard
         defaults.set(bookmark, forKey: Key.bookmark)
+        defaults.set(locationBookmark, forKey: Key.locationBookmark)
         defaults.set(true, forKey: Key.enabled)
         status = .syncing
     }
@@ -95,17 +119,15 @@ final class ICloudSyncManager: ObservableObject {
     func removeFolder() {
         cancelPendingWork()
         folderBookmark = nil
+        folderLocationBookmark = nil
         selectedFolderName = nil
-        UserDefaults.standard.removeObject(forKey: Key.bookmark)
+        defaults.removeObject(forKey: Key.bookmark)
+        defaults.removeObject(forKey: Key.locationBookmark)
         status = .notConfigured
     }
 
     func revealFolderInFinder() throws {
-        guard let bookmark = folderBookmark else { throw SyncError.notConfigured }
-        try SecurityScopedBookmarkService.withAccess(
-            to: bookmark,
-            fallbackURL: URL(fileURLWithPath: "/")
-        ) { folderURL in
+        try withFolderAccess { folderURL in
             NSWorkspace.shared.activateFileViewerSelecting([folderURL])
         }
     }
@@ -113,7 +135,7 @@ final class ICloudSyncManager: ObservableObject {
     func setEnabled(_ enabled: Bool) {
         guard isEnabled != enabled else { return }
         isEnabled = enabled
-        UserDefaults.standard.set(enabled, forKey: Key.enabled)
+        defaults.set(enabled, forKey: Key.enabled)
         cancelPendingWork()
         status = enabled ? (isConfigured ? .syncing : .notConfigured) : .disabled
     }
@@ -280,17 +302,12 @@ final class ICloudSyncManager: ObservableObject {
     }
 
     private func syncFileURL(fileName: String) throws -> URL {
-        guard let bookmark = folderBookmark else { throw SyncError.notConfigured }
-        return try SecurityScopedBookmarkService.resolve(bookmark)
+        try resolveFolderURL()
             .appendingPathComponent(fileName, isDirectory: false)
     }
 
     private func readSnapshot() throws -> FileSnapshot? {
-        guard let bookmark = folderBookmark else { throw SyncError.notConfigured }
-        return try SecurityScopedBookmarkService.withAccess(
-            to: bookmark,
-            fallbackURL: URL(fileURLWithPath: "/")
-        ) { folderURL in
+        try withFolderAccess { folderURL in
             let fileURL = folderURL.appendingPathComponent(Self.workbenchFileName)
             guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
 
@@ -323,12 +340,8 @@ final class ICloudSyncManager: ObservableObject {
     }
 
     private func write(_ library: LaunchpadLibrary) throws {
-        guard let bookmark = folderBookmark else { throw SyncError.notConfigured }
         let data = try LaunchpadJSONCodec.encode(library.cloudPortableCopy())
-        try SecurityScopedBookmarkService.withAccess(
-            to: bookmark,
-            fallbackURL: URL(fileURLWithPath: "/")
-        ) { folderURL in
+        try withFolderAccess { folderURL in
             let fileURL = folderURL.appendingPathComponent(Self.workbenchFileName)
             var coordinationError: NSError?
             var writeError: Error?
@@ -349,11 +362,7 @@ final class ICloudSyncManager: ObservableObject {
     }
 
     private func readSettingsDocument() throws -> SyncedPreferencesSnapshot? {
-        guard let bookmark = folderBookmark else { throw SyncError.notConfigured }
-        return try SecurityScopedBookmarkService.withAccess(
-            to: bookmark,
-            fallbackURL: URL(fileURLWithPath: "/")
-        ) { folderURL in
+        try withFolderAccess { folderURL in
             let fileURL = folderURL.appendingPathComponent(Self.settingsFileName)
             guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
 
@@ -388,12 +397,8 @@ final class ICloudSyncManager: ObservableObject {
     }
 
     private func writeSettingsDocument(_ document: SyncedPreferencesSnapshot) throws {
-        guard let bookmark = folderBookmark else { throw SyncError.notConfigured }
         let data = try LaunchpadJSONCodec.encode(document)
-        try SecurityScopedBookmarkService.withAccess(
-            to: bookmark,
-            fallbackURL: URL(fileURLWithPath: "/")
-        ) { folderURL in
+        try withFolderAccess { folderURL in
             let fileURL = folderURL.appendingPathComponent(Self.settingsFileName)
             var coordinationError: NSError?
             var writeError: Error?
@@ -427,15 +432,12 @@ final class ICloudSyncManager: ObservableObject {
     }
 
     private func updateTransferStatus(for fileURL: URL) async {
-        guard let bookmark = folderBookmark else {
+        guard isConfigured else {
             status = .notConfigured
             return
         }
         do {
-            let values = try SecurityScopedBookmarkService.withAccess(
-                to: bookmark,
-                fallbackURL: fileURL.deletingLastPathComponent()
-            ) { _ in
+            let values = try withFolderAccess { _ in
                 try fileURL.resourceValues(forKeys: [
                     .ubiquitousItemIsUploadedKey,
                     .ubiquitousItemIsUploadingKey,
@@ -456,8 +458,55 @@ final class ICloudSyncManager: ObservableObject {
     private func markSuccessfulSync() {
         let now = Date()
         lastSuccessfulSync = now
-        UserDefaults.standard.set(now, forKey: Key.lastSuccessfulSync)
+        defaults.set(now, forKey: Key.lastSuccessfulSync)
         status = .synced
+    }
+
+    private func resolveFolderURL() throws -> URL {
+        guard let url = Self.resolveStoredFolderURL(
+            bookmark: folderBookmark,
+            locationBookmark: folderLocationBookmark
+        ) else {
+            throw SyncError.notConfigured
+        }
+        return url
+    }
+
+    private func withFolderAccess<T>(_ operation: (URL) throws -> T) throws -> T {
+        let url = try resolveFolderURL()
+        let didStartAccessing = url.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccessing { url.stopAccessingSecurityScopedResource() }
+        }
+        return try operation(url)
+    }
+
+    private static func usableSecurityBookmark(_ bookmark: Data?) -> Data? {
+        guard let bookmark,
+              (try? SecurityScopedBookmarkService.resolve(bookmark)) != nil else { return nil }
+        return bookmark
+    }
+
+    private static func resolveStoredFolderURL(
+        bookmark: Data?,
+        locationBookmark: Data?
+    ) -> URL? {
+        if let bookmark,
+           let url = try? SecurityScopedBookmarkService.resolve(bookmark) {
+            return url
+        }
+        if let locationBookmark,
+           let url = try? SecurityScopedBookmarkService.resolveLocation(locationBookmark) {
+            return url
+        }
+        // Migration path for releases that only persisted the security-scoped
+        // bookmark: macOS can sometimes still recover its location without
+        // granting the obsolete security scope.
+        if let bookmark,
+           let url = try? SecurityScopedBookmarkService.resolveLocation(bookmark) {
+            return url
+        }
+        return nil
     }
 
     private func setError(_ error: Error) {

@@ -198,7 +198,7 @@ private struct RunnerServerEditor: View {
                 }
                 .pickerStyle(.segmented)
                 if server.authentication == .password {
-                    SecureField("密码", text: $password, prompt: Text("服务器登录密码"))
+                    RevealablePasswordField("密码", text: $password, prompt: "服务器登录密码")
                 } else {
                     LabeledContent("SSH Key") {
                         HStack {

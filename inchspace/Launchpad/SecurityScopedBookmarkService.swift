@@ -34,6 +34,17 @@ enum SecurityScopedBookmarkService {
         )
     }
 
+    /// A code-signing-independent location reference used as a fallback by
+    /// non-sandboxed builds when an app-scoped bookmark no longer matches the
+    /// identity of an updated application.
+    static func makeLocationBookmark(for url: URL) throws -> Data {
+        try url.bookmarkData(
+            options: [],
+            includingResourceValuesForKeys: [.nameKey, .isDirectoryKey],
+            relativeTo: nil
+        )
+    }
+
     nonisolated static func resolve(_ data: Data) throws -> URL {
         var isStale = false
         let url = try URL(
@@ -44,6 +55,16 @@ enum SecurityScopedBookmarkService {
         )
         guard !isStale else { throw BookmarkError.stale }
         return url
+    }
+
+    nonisolated static func resolveLocation(_ data: Data) throws -> URL {
+        var isStale = false
+        return try URL(
+            resolvingBookmarkData: data,
+            options: [.withoutUI],
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale
+        )
     }
 
     static func withAccess<T>(to data: Data?, fallbackURL: URL, operation: (URL) throws -> T) throws -> T {

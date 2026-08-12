@@ -34,8 +34,11 @@ struct UpdateSettingsSection: View {
                     updateManager.checkForUpdates()
                 } label: {
                     Label("检查更新", systemImage: "arrow.triangle.2.circlepath")
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.plain)
                 .disabled(!updateManager.canCheckForUpdates)
             }
             .padding(.vertical, 4)

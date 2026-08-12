@@ -496,6 +496,61 @@ final class LaunchpadLayoutEngineTests: XCTestCase {
         XCTAssertEqual(restored.library, repository.library)
     }
 
+    func testMissingLibraryStartsWithNoDefaultIcons() {
+        let repository = LaunchpadRepository(
+            persistence: LaunchpadPersistenceService(fileURL: temporaryLibraryURL())
+        )
+
+        XCTAssertTrue(repository.library.items.isEmpty)
+        XCTAssertTrue(repository.library.groups.isEmpty)
+        XCTAssertNil(repository.persistenceError)
+    }
+
+    func testUnreadableLibraryShowsEmptyLaunchpadInsteadOfDefaultIcons() throws {
+        let fileURL = temporaryLibraryURL()
+        try FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("not valid launchpad data".utf8).write(to: fileURL)
+
+        let repository = LaunchpadRepository(
+            persistence: LaunchpadPersistenceService(fileURL: fileURL)
+        )
+
+        XCTAssertTrue(repository.library.items.isEmpty)
+        XCTAssertTrue(repository.library.groups.isEmpty)
+        XCTAssertNotNil(repository.persistenceError)
+    }
+
+    func testPreviouslyPersistedDefaultIconsMigrateToEmptyLibrary() throws {
+        let legacyApplications = [
+            ("Safari", "com.apple.Safari"),
+            ("备忘录", "com.apple.Notes"),
+            ("日历", "com.apple.iCal"),
+            ("文本编辑", "com.apple.TextEdit"),
+            ("预览", "com.apple.Preview"),
+            ("系统设置", "com.apple.systempreferences"),
+            ("App Store", "com.apple.AppStore"),
+        ]
+        let items = legacyApplications.enumerated().map { index, application in
+            LaunchItem(
+                name: application.0,
+                category: .application,
+                target: .application(bundleIdentifier: application.1, path: nil),
+                orderIndex: index
+            )
+        }
+        let fileURL = temporaryLibraryURL()
+        let persistence = LaunchpadPersistenceService(fileURL: fileURL)
+        try persistence.save(LaunchpadLibrary(items: items))
+
+        let repository = LaunchpadRepository(persistence: persistence)
+
+        XCTAssertTrue(repository.library.items.isEmpty)
+        XCTAssertTrue(try XCTUnwrap(persistence.load()).items.isEmpty)
+    }
+
     func testLegacyFlatItemArrayStillLoads() throws {
         let legacyItem = makeItems(count: 1, category: .application)[0]
         let encodedItem = try JSONEncoder().encode(legacyItem)

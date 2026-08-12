@@ -2,6 +2,47 @@ import XCTest
 @testable import inchspace
 
 final class ICloudPortableDataTests: XCTestCase {
+    private let locationBookmarkKey = "iCloudDriveSyncFolderLocationBookmark"
+
+    func testLocationBookmarkRestoresConfiguredFolderWhenSecurityBookmarkIsInvalid() throws {
+        let suiteName = "ICloudPortableDataTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let folderURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folderURL) }
+
+        let locationBookmark = try SecurityScopedBookmarkService.makeLocationBookmark(for: folderURL)
+        defaults.set(Data([0, 1, 2]), forKey: "iCloudDriveSyncFolderBookmark")
+        defaults.set(locationBookmark, forKey: locationBookmarkKey)
+
+        let manager = ICloudSyncManager(defaults: defaults)
+
+        XCTAssertTrue(manager.isConfigured)
+        XCTAssertEqual(manager.selectedFolderName, folderURL.lastPathComponent)
+        XCTAssertEqual(manager.status, .syncing)
+        XCTAssertNotNil(defaults.data(forKey: locationBookmarkKey))
+    }
+
+    func testRemovingFolderAlsoRemovesLocationFallback() throws {
+        let suiteName = "ICloudPortableDataTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let folderURL = FileManager.default.temporaryDirectory
+        defaults.set(
+            try SecurityScopedBookmarkService.makeLocationBookmark(for: folderURL),
+            forKey: locationBookmarkKey
+        )
+        let manager = ICloudSyncManager(defaults: defaults)
+
+        manager.removeFolder()
+
+        XCTAssertFalse(manager.isConfigured)
+        XCTAssertNil(defaults.data(forKey: locationBookmarkKey))
+        XCTAssertEqual(manager.status, .notConfigured)
+    }
+
     func testSettingsSnapshotRoundTripPreservesSubsecondConflictTimestamp() throws {
         let date = Date(timeIntervalSince1970: 1_786_300_000.123_456)
         let snapshot = ICloudSyncManager.SyncedPreferencesSnapshot(

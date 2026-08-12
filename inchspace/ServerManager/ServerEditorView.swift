@@ -69,8 +69,6 @@ struct ServerEditorView: View {
                 Text("配置 SSH 主机资产与连接方式").font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            Button { dismiss() } label: { Image(systemName: "xmark") }
-                .buttonStyle(.borderless)
         }
         .padding(22)
     }
@@ -169,7 +167,10 @@ struct ServerEditorView: View {
                     }
                 case .password:
                     field("密码") {
-                        SecureField(originalServer == nil ? "服务器登录密码" : "留空以保留当前密码", text: $password)
+                        RevealablePasswordField(
+                            originalServer == nil ? "服务器登录密码" : "留空以保留当前密码",
+                            text: $password
+                        )
                     }
                 case .agent:
                     Label("连接时使用当前用户的 ssh-agent 和已加载密钥。", systemImage: "checkmark.shield")
@@ -215,6 +216,7 @@ struct ServerEditorView: View {
     private var footer: some View {
         HStack {
             Button("取消") { dismiss() }
+                .keyboardShortcut(.cancelAction)
             Spacer()
             if step.rawValue > 0 {
                 Button("上一步") { withAnimation(.snappy(duration: 0.2)) { step = Step(rawValue: step.rawValue - 1)! } }
@@ -323,5 +325,40 @@ struct ServerEditorView: View {
         }
         step = current
         return true
+    }
+}
+
+struct RevealablePasswordField: View {
+    let title: String
+    @Binding var text: String
+    private let prompt: String?
+    @State private var showsPassword = false
+
+    init(_ title: String, text: Binding<String>, prompt: String? = nil) {
+        self.title = title
+        _text = text
+        self.prompt = prompt
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Group {
+                if showsPassword {
+                    TextField(title, text: $text, prompt: prompt.map(Text.init))
+                } else {
+                    SecureField(title, text: $text, prompt: prompt.map(Text.init))
+                }
+            }
+
+            Button {
+                showsPassword.toggle()
+            } label: {
+                Image(systemName: showsPassword ? "eye.slash" : "eye")
+                    .frame(width: 18)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(showsPassword ? "隐藏密码" : "显示密码")
+            .help(showsPassword ? "隐藏密码" : "显示密码")
+        }
     }
 }

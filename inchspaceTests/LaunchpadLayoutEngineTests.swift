@@ -192,7 +192,7 @@ final class LaunchpadLayoutEngineTests: XCTestCase {
     }
 
     func testHoverBeforeDelayDoesNotArmFolder() async throws {
-        let (coordinator, _, targetID) = try await makeDraggingCoordinator(folderHoverDelay: 0.08)
+        let (coordinator, _, targetID) = try await makeDraggingCoordinator(folderHoverDelay: 0.5)
         coordinator.hoverOver(candidateID: targetID, location: .zero)
 
         try await Task.sleep(for: .milliseconds(20))
@@ -204,7 +204,7 @@ final class LaunchpadLayoutEngineTests: XCTestCase {
         let (coordinator, _, targetID) = try await makeDraggingCoordinator(folderHoverDelay: 0.02)
         coordinator.hoverOver(candidateID: targetID, location: .zero)
 
-        try await Task.sleep(for: .milliseconds(40))
+        try await waitUntil { coordinator.state.phase == .folderReady }
         XCTAssertEqual(coordinator.state.phase, .folderReady)
         XCTAssertEqual(coordinator.committedGroupTarget, targetID)
 
@@ -215,16 +215,16 @@ final class LaunchpadLayoutEngineTests: XCTestCase {
     }
 
     func testHoverMovementBeyondToleranceRestartsDelay() async throws {
-        let (coordinator, _, targetID) = try await makeDraggingCoordinator(folderHoverDelay: 0.06)
+        let (coordinator, _, targetID) = try await makeDraggingCoordinator(folderHoverDelay: 0.5)
         coordinator.hoverOver(candidateID: targetID, location: .zero)
-        try await Task.sleep(for: .milliseconds(30))
+        try await Task.sleep(for: .milliseconds(20))
 
         let movedLocation = CGPoint(
             x: LaunchpadInteractionConstants.folderMovementTolerance + 1,
             y: 0
         )
         coordinator.hoverOver(candidateID: targetID, location: movedLocation)
-        try await Task.sleep(for: .milliseconds(35))
+        try await Task.sleep(for: .milliseconds(20))
 
         XCTAssertEqual(coordinator.state.phase, .hoveringForFolder)
         XCTAssertEqual(coordinator.state.folderHoverStartLocation, movedLocation)
@@ -729,12 +729,24 @@ final class LaunchpadLayoutEngineTests: XCTestCase {
         let sourceID = UUID()
         let targetID = UUID()
         coordinator.beginPress(entryID: sourceID, location: .zero)
-        try await Task.sleep(for: .milliseconds(20))
+        try await waitUntil { coordinator.state.phase == .editing }
         XCTAssertEqual(coordinator.state.phase, .editing)
         XCTAssertFalse(coordinator.finishPress(entryID: sourceID))
         coordinator.beginDrag(entryID: sourceID, pageIndex: 0, proposedIndex: 0)
         XCTAssertEqual(coordinator.state.phase, .dragging)
         return (coordinator, sourceID, targetID)
+    }
+
+    private func waitUntil(
+        timeout: Duration = .seconds(1),
+        condition: @escaping @MainActor () -> Bool
+    ) async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while !condition(), clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        XCTAssertTrue(condition(), "Timed out waiting for asynchronous state change.")
     }
 
     private func makeItems(count: Int, category: LaunchItemCategory) -> [LaunchItem] {

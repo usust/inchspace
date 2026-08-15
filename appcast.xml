@@ -3,6 +3,15 @@
     <channel>
         <title>inchspace</title>
         <item>
+            <title>0.0.9</title>
+            <pubDate>Sat, 15 Aug 2026 14:17:27 +0800</pubDate>
+            <link>https://github.com/usust/inchspace</link>
+            <sparkle:version>5</sparkle:version>
+            <sparkle:shortVersionString>0.0.9</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/usust/inchspace/releases/download/v0.0.9/inchspace-0.0.9.dmg" length="8561511" type="application/octet-stream" sparkle:edSignature="wn1X+YIW362GJ/DVuL6A6jlJSI9K5vZr379PPyVIFIOyuOuBtF2sR68CJbr0T0T3pZR/kLSEEZ75oqdD6br/Bg=="/>
+        </item>
+        <item>
             <title>0.0.8</title>
             <pubDate>Wed, 12 Aug 2026 23:10:08 +0800</pubDate>
             <link>https://github.com/usust/inchspace</link>
@@ -19,15 +28,6 @@
             <sparkle:shortVersionString>0.0.7</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
             <enclosure url="https://github.com/usust/inchspace/releases/download/v0.0.7/inchspace-0.0.7.dmg" length="8357722" type="application/octet-stream" sparkle:edSignature="DIdT6P5jBl/7ewqrf99aHZj1IgXUvb8AzxvCl8qJS8Nrlps31Yvs8tg5Ns5xC0g6IpMlODeK9KE/+QthVzSECQ=="/>
-        </item>
-        <item>
-            <title>0.0.4</title>
-            <pubDate>Sat, 08 Aug 2026 17:27:44 +0800</pubDate>
-            <link>https://github.com/usust/inchspace</link>
-            <sparkle:version>2</sparkle:version>
-            <sparkle:shortVersionString>0.0.6</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/usust/inchspace/releases/download/v0.0.6/inchspace-0.0.6.dmg" length="5089319" type="application/octet-stream" sparkle:edSignature="ieQYeZnb2854aA1F4iYzv4HCjFIsVNO/2mvGvoHcrWBQI4k/VJ0LLKJe7kapnYnNz1B1g3tItIxupTkvBstsAw=="/>
         </item>
     </channel>
 </rss>

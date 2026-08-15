@@ -16,12 +16,14 @@ struct ContentView: View {
     @StateObject private var runnerStore: RunnerStore
     @StateObject private var serverManager: ServerManager
     @StateObject private var terminalManager: TerminalManager
+    private let environmentService: EnvironmentVariableService
     @State private var selection: SidebarDestination? = .workspace
     @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var visibilityController: AppVisibilityController
 
     init(updateManager: UpdateManager) {
         self.updateManager = updateManager
+        environmentService = EnvironmentVariableService()
         let syncManager = ICloudSyncManager()
         _syncManager = StateObject(wrappedValue: syncManager)
         _repository = StateObject(wrappedValue: LaunchpadRepository(syncManager: syncManager))
@@ -51,6 +53,7 @@ struct ContentView: View {
             await synchronizePreferences(allowsUpload: true)
         }
         .task { await runnerStore.bootstrap() }
+        .task { _ = environmentService.reloadEnvironment() }
         .onReceive(visibilityController.preferences.$syncedModifiedAt.dropFirst().compactMap { $0 }) { date in
             syncManager.schedulePreferencesUpload(
                 visibilityController.preferences.syncedPreferences,
@@ -81,6 +84,8 @@ struct ContentView: View {
             RunnerView(store: runnerStore)
         case .servers:
             ServerManagerView(manager: serverManager)
+        case .environmentVariables:
+            EnvironmentVariableView(service: environmentService, terminalManager: terminalManager)
         case .terminal:
             TerminalView(manager: terminalManager, serverManager: serverManager)
         case .text, .image, .conversion, .developer:

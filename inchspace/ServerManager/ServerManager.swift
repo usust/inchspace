@@ -428,7 +428,7 @@ final class ServerManager: ObservableObject {
                 try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
             } catch { return nil }
             askPassURL = url
-            var values = ProcessInfo.processInfo.environment
+            var values = AppEnvironmentStore.shared.environment()
             values["SSH_ASKPASS"] = url.path
             values["SSH_ASKPASS_REQUIRE"] = "force"
             values["DISPLAY"] = "inchspace:0"

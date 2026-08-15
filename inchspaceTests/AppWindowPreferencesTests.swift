@@ -1,3 +1,4 @@
+import AppKit
 import Carbon.HIToolbox
 import XCTest
 @testable import inchspace
@@ -97,6 +98,37 @@ final class AppWindowPreferencesTests: XCTestCase {
         preferences.setPosition(.screenCenter)
         XCTAssertNotNil(preferences.syncedModifiedAt)
         XCTAssertGreaterThanOrEqual(preferences.syncedModifiedAt!, firstDate!)
+    }
+
+    func testMainWindowBridgeReportsEachWindowOnlyWhenAttachmentChanges() {
+        let firstWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let secondWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        var reportedWindows: [NSWindow] = []
+        let bridge = MainWindowRegistrationView { reportedWindows.append($0) }
+
+        firstWindow.contentView?.addSubview(bridge)
+        bridge.viewDidMoveToWindow()
+        XCTAssertEqual(reportedWindows.count, 1)
+        XCTAssertTrue(reportedWindows.first === firstWindow)
+
+        bridge.removeFromSuperview()
+        firstWindow.contentView?.addSubview(bridge)
+        XCTAssertEqual(reportedWindows.count, 1)
+
+        bridge.removeFromSuperview()
+        secondWindow.contentView?.addSubview(bridge)
+        XCTAssertEqual(reportedWindows.count, 2)
+        XCTAssertTrue(reportedWindows.last === secondWindow)
     }
 
     private func makeDefaults() -> (UserDefaults, String) {

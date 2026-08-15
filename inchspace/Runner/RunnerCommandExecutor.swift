@@ -20,7 +20,7 @@ enum RunnerCommandExecutor {
             process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = arguments
             process.currentDirectoryURL = currentDirectory
-            if let environment { process.environment = environment }
+            process.environment = environment ?? AppEnvironmentStore.shared.environment()
             if usesNullInput { process.standardInput = FileHandle.nullDevice }
             process.standardOutput = outputPipe
             process.standardError = outputPipe

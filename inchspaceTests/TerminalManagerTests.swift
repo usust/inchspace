@@ -112,6 +112,88 @@ final class TerminalManagerTests: XCTestCase {
         XCTAssertTrue(session.terminalView.findNext("😀"), "SwiftTerm Grapheme Store 缺少 Emoji")
     }
 
+    func testNewLocalTerminalReceivesLatestManagedEnvironment() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "inchspace-terminal-env-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let home = root.appending(path: "home", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        defer {
+            AppEnvironmentStore.shared.replaceOverrides(with: [:])
+            try? FileManager.default.removeItem(at: root)
+        }
+        let key = "INCHSPACE_TERMINAL_ENV_\(UUID().uuidString.replacingOccurrences(of: "-", with: "_"))"
+        let value = "terminal-value-42"
+        let toolsDirectory = root.appending(path: "tools", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: toolsDirectory, withIntermediateDirectories: true)
+        let commandName = "inchspace-path-test-\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())"
+        let executable = toolsDirectory.appending(path: commandName)
+        try "#!/bin/sh\nprintf '__INCHSPACE_PATH_COMMAND__OK__END__\\n'\n"
+            .write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        let service = EnvironmentVariableService(homeDirectory: home)
+        try service.createEnvironmentVariable(name: key, value: value)
+        try service.createEnvironmentVariable(
+            name: "INCHSPACE_TEST_TOOLS",
+            value: toolsDirectory.path,
+            exportToPath: true
+        )
+
+        let (preferences, suiteName) = makePreferences()
+        defer { UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName) }
+        preferences.cleanShellStartup = true
+        let manager = TerminalManager(preferences: preferences)
+        let session = manager.openLocalSession(directory: "/tmp")
+        session.startIfNeeded()
+        defer { session.terminate() }
+
+        try await Task.sleep(for: .milliseconds(250))
+        let command = "printf '__INCHSPACE_ENV__%s__END__\\n' \"$\(key)\"; \(commandName)\r"
+        session.terminalView.send(source: session.terminalView, data: Array(command.utf8)[...])
+        var buffer = ""
+        for _ in 0..<40 {
+            buffer = String(decoding: session.terminalView.getTerminal().getBufferAsData(), as: UTF8.self)
+            if buffer.contains("__INCHSPACE_ENV__\(value)__END__"),
+               buffer.contains("__INCHSPACE_PATH_COMMAND__OK__END__") { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertTrue(buffer.contains("__INCHSPACE_ENV__\(value)__END__"), "新终端未收到最新环境：\(buffer.prefix(500))")
+        XCTAssertTrue(
+            buffer.contains("__INCHSPACE_PATH_COMMAND__OK__END__"),
+            "加入 PATH 后仍无法直接执行目录中的命令：\(buffer.prefix(500))"
+        )
+    }
+
+    func testSourceEnvironmentFileAppliesToRunningLocalTerminal() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "inchspace-terminal-source-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let configURL = root.appending(path: "profile with space")
+        let key = "INCHSPACE_SOURCE_TEST"
+        let value = "sourced-value-42"
+        try "export \(key)='\(value)'\n".write(to: configURL, atomically: true, encoding: .utf8)
+
+        let (preferences, suiteName) = makePreferences()
+        defer { UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName) }
+        let manager = TerminalManager(preferences: preferences)
+        let session = manager.openLocalSession(directory: "/tmp")
+        session.startIfNeeded()
+        defer { session.terminate() }
+
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertTrue(manager.sourceEnvironmentFile(configURL))
+        try await Task.sleep(for: .milliseconds(100))
+        let command = "printf '__SOURCED__%s__END__\\n' \"$\(key)\"\r"
+        session.terminalView.send(source: session.terminalView, data: Array(command.utf8)[...])
+        var buffer = ""
+        for _ in 0..<40 {
+            buffer = String(decoding: session.terminalView.getTerminal().getBufferAsData(), as: UTF8.self)
+            if buffer.contains("__SOURCED__\(value)__END__") { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertTrue(buffer.contains("__SOURCED__\(value)__END__"), "source 未应用到运行中终端：\(buffer.prefix(500))")
+    }
+
     func testTerminalContainerInsetsDefineTheRealGridArea() {
         let (preferences, _) = makePreferences()
         let manager = TerminalManager(preferences: preferences)

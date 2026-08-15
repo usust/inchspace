@@ -257,7 +257,7 @@ struct SystemdRunnerServiceManager: RunnerServiceManaging {
             let script = "#!/bin/sh\nprintf '%s\\n' \"$INCHSPACE_SSH_PASSWORD\"\n"
             try Data(script.utf8).write(to: askPassURL, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: askPassURL.path)
-            environment = ProcessInfo.processInfo.environment.merging([
+            environment = AppEnvironmentStore.shared.environment().merging([
                 "SSH_ASKPASS": askPassURL.path,
                 "SSH_ASKPASS_REQUIRE": "force",
                 "DISPLAY": "inchspace",

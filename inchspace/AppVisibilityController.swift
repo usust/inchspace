@@ -182,7 +182,7 @@ final class AppVisibilityController: NSObject, ObservableObject {
     private weak var mainWindow: NSWindow?
     private var openMainWindow: (() -> Void)?
     private var statusItem: NSStatusItem?
-    private var observedWindowNumber: Int?
+    private let initializedWindows = NSHashTable<NSWindow>.weakObjects()
     private var hasStarted = false
 
     private override init() {
@@ -218,12 +218,7 @@ final class AppVisibilityController: NSObject, ObservableObject {
             )
         }
         mainWindow = window
-        window.identifier = NSUserInterfaceItemIdentifier("inchspace.mainWindow")
-        window.isReleasedWhenClosed = false
-        window.setFrameAutosaveName("inchspace.mainWindow")
-
-        if observedWindowNumber != window.windowNumber {
-            observedWindowNumber = window.windowNumber
+        if isNewWindow {
             let center = NotificationCenter.default
             center.addObserver(
                 self,
@@ -239,8 +234,18 @@ final class AppVisibilityController: NSObject, ObservableObject {
             )
         }
 
-        if isNewWindow, !window.isVisible {
-            applyInitialPosition(to: window)
+        // SwiftUI may rebuild the representable that discovers this window.
+        // Window configuration and initial positioning must nevertheless run
+        // once per NSWindow object: writing its frame during a Window Server
+        // drag makes the window jump back and can cancel the drag session.
+        if !initializedWindows.allObjects.contains(where: { $0 === window }) {
+            initializedWindows.add(window)
+            window.identifier = NSUserInterfaceItemIdentifier("inchspace.mainWindow")
+            window.isReleasedWhenClosed = false
+            window.setFrameAutosaveName("inchspace.mainWindow")
+            if !window.isVisible {
+                applyInitialPosition(to: window)
+            }
         }
         refreshState()
     }
@@ -515,15 +520,39 @@ struct MainWindowBridge: NSViewRepresentable {
     @ObservedObject var controller: AppVisibilityController
 
     func makeNSView(context: Context) -> NSView {
-        NSView(frame: .zero)
+        MainWindowRegistrationView { [weak controller] window in
+            controller?.registerMainWindow(window)
+        }
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async {
-            if let window = nsView.window {
-                controller.registerMainWindow(window)
-            }
+        guard let registrationView = nsView as? MainWindowRegistrationView else { return }
+        registrationView.onWindowChanged = { [weak controller] window in
+            controller?.registerMainWindow(window)
         }
+    }
+}
+
+/// Reports an attachment when AppKit actually moves the bridge into a window.
+/// Unlike `updateNSView`, this is not called for unrelated SwiftUI state changes.
+final class MainWindowRegistrationView: NSView {
+    var onWindowChanged: (NSWindow) -> Void
+    private weak var registeredWindow: NSWindow?
+
+    init(onWindowChanged: @escaping (NSWindow) -> Void) {
+        self.onWindowChanged = onWindowChanged
+        super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window, registeredWindow !== window else { return }
+        registeredWindow = window
+        onWindowChanged(window)
     }
 }
 

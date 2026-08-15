@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import SwiftTerm
 
 @MainActor
 final class TerminalManager: ObservableObject {
@@ -86,6 +87,20 @@ final class TerminalManager: ObservableObject {
         sessions.forEach { $0.applyAppearance() }
     }
 
+    /// Reloads a user Shell configuration in the currently active local terminal.
+    /// Running remote sessions are intentionally excluded because the URL belongs to this Mac.
+    @discardableResult
+    func sourceEnvironmentFile(_ url: URL) -> Bool {
+        guard let session = selectedSession,
+              case .local = session.kind,
+              session.activePane.isRunning else { return false }
+        let quotedPath = "'" + url.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        let command = "source \(quotedPath)\r"
+        let bytes = Array(command.utf8)
+        session.activePane.terminalView.send(source: session.activePane.terminalView, data: bytes[...])
+        return true
+    }
+
     func session(id: UUID?) -> TerminalSession? {
         guard let id else { return nil }
         return sessions.first { $0.id == id }
@@ -101,7 +116,7 @@ final class TerminalManager: ObservableObject {
             kind: .local(shell: shell),
             preferences: preferences
         ) { inheritedDirectory in
-            var environment = ProcessInfo.processInfo.environment
+            var environment = AppEnvironmentStore.shared.environment()
             environment["TERM"] = "xterm-256color"
             environment["COLORTERM"] = "truecolor"
             // Theme palettes only map ANSI indices to colors; programs still

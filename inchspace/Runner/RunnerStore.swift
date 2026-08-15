@@ -110,7 +110,7 @@ final class RunnerStore: ObservableObject {
             process.executableURL = URL(fileURLWithPath: "/bin/zsh")
             process.arguments = ["-l", "-c", task.command]
             process.currentDirectoryURL = directoryURL
-            var environment = ProcessInfo.processInfo.environment
+            var environment = AppEnvironmentStore.shared.environment()
             environment["PATH"] = environment["PATH"].flatMap { $0.isEmpty ? nil : $0 }
                 ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
             task.environment.forEach { variable in

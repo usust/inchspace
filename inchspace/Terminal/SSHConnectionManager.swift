@@ -41,7 +41,7 @@ enum SSHConnectionManager {
             "-o", "ServerAliveInterval=\(max(0, server.keepAliveInterval))",
             "-p", String(server.port)
         ]
-        var environment = ProcessInfo.processInfo.environment
+        var environment = AppEnvironmentStore.shared.environment()
         environment["TERM"] = "xterm-256color"
         environment["COLORTERM"] = "truecolor"
         environment["LANG"] = environment["LANG"] ?? "en_US.UTF-8"
@@ -105,4 +105,3 @@ private enum SSHConnectionPreparationError: LocalizedError {
         }
     }
 }
-

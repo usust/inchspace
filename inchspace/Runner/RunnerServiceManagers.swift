@@ -42,7 +42,7 @@ struct LocalRunnerServiceManager: RunnerServiceManaging {
             }
         }
         return (
-            visible.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending },
+            visible.sorted { $0.serviceName.localizedCaseInsensitiveCompare($1.serviceName) == .orderedAscending },
             available
         )
     }
@@ -67,7 +67,7 @@ struct LocalRunnerServiceManager: RunnerServiceManaging {
                 })
             }
         }
-        return result.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+        return result.sorted { $0.serviceName.localizedCaseInsensitiveCompare($1.serviceName) == .orderedAscending }
     }
 
     func start(_ service: RunnerService) async throws { try await perform("start", service) }

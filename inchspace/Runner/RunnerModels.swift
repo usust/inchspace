@@ -125,6 +125,26 @@ struct RunnerService: Codable, Identifiable, Hashable, Sendable {
     var requiresConfirmation: Bool {
         isSystemService || identifier.hasPrefix("com.apple.")
     }
+
+    /// A service-oriented name for the primary label in the UI. GitHub Actions
+    /// launchd labels end in the runner machine name, while the preceding value
+    /// identifies the repository/service the runner belongs to.
+    var serviceName: String {
+        guard kind == .launchd,
+              identifier.hasPrefix("actions.runner.") else { return displayName }
+        let suffix = identifier.dropFirst("actions.runner.".count)
+        guard let separator = suffix.lastIndex(of: ".") else { return displayName }
+        let name = suffix[..<separator]
+        return name.isEmpty ? displayName : String(name)
+    }
+
+    var instanceName: String? {
+        guard kind == .launchd,
+              identifier.hasPrefix("actions.runner."),
+              let name = identifier.split(separator: ".").last.map(String.init),
+              name != serviceName else { return nil }
+        return name
+    }
 }
 
 struct RunnerManagedService: Codable, Identifiable, Hashable, Sendable {

@@ -335,6 +335,7 @@ struct WebsiteEditorSheet: View {
     @State private var address: String
     @State private var iconAddress: String
     @State private var validationMessage: String?
+    @State private var isResolving = false
     @Environment(\.dismiss) private var dismiss
 
     init(item: LaunchItem?, onSave: @escaping (String, URL, String?) -> Void) {
@@ -354,7 +355,7 @@ struct WebsiteEditorSheet: View {
             Text(item == nil ? "添加网站" : "编辑网站")
                 .font(.title2.weight(.semibold))
             Form {
-                TextField("名称", text: $name)
+                TextField("名称（可选）", text: $name, prompt: Text("留空则读取网页标题"))
                 TextField("网址", text: $address, prompt: Text("example.com"))
                 TextField("图标网址（可选）", text: $iconAddress)
             }
@@ -367,11 +368,19 @@ struct WebsiteEditorSheet: View {
             }
 
             HStack {
+                if isResolving {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("正在读取网页信息…")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
                 Button("取消") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("保存", action: save)
                     .keyboardShortcut(.defaultAction)
+                    .disabled(isResolving)
             }
         }
         .padding(24)
@@ -379,11 +388,6 @@ struct WebsiteEditorSheet: View {
     }
 
     private func save() {
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedName.isEmpty else {
-            validationMessage = "请输入名称。"
-            return
-        }
         guard let url = LaunchpadOpenService.normalizedWebsiteURL(from: address) else {
             validationMessage = "请输入有效的 HTTP 或 HTTPS 地址。"
             return
@@ -394,7 +398,19 @@ struct WebsiteEditorSheet: View {
             validationMessage = "图标网址无效。"
             return
         }
-        onSave(trimmedName, url, normalizedIcon?.absoluteString)
-        dismiss()
+
+        isResolving = true
+        validationMessage = nil
+        Task {
+            let metadata = await WebsiteMetadataService.metadata(for: url)
+            let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let resolvedName = trimmedName.isEmpty
+                ? (metadata?.title ?? url.host(percentEncoded: false) ?? url.absoluteString)
+                : trimmedName
+            let resolvedIcon = normalizedIcon?.absoluteString
+                ?? metadata?.iconURLs.first?.absoluteString
+            onSave(resolvedName, url, resolvedIcon)
+            dismiss()
+        }
     }
 }

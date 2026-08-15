@@ -11,7 +11,7 @@ struct RunnerLocalServicesView: View {
         let keywords = search.split(whereSeparator: \Character.isWhitespace).map(String.init)
         guard !keywords.isEmpty else { return store.localServices }
         return store.localServices.filter { service in
-            let text = [service.displayName, service.identifier, service.detail ?? ""].joined(separator: " ")
+            let text = [service.serviceName, service.displayName, service.identifier, service.detail ?? ""].joined(separator: " ")
             return keywords.allSatisfy { text.localizedCaseInsensitiveContains($0) }
         }
     }
@@ -80,9 +80,20 @@ struct RunnerLocalServicesView: View {
                 .frame(width: 38, height: 38)
                 .background(runnerStatusColor(service.state).opacity(0.11), in: RoundedRectangle(cornerRadius: 11))
             VStack(alignment: .leading, spacing: 3) {
-                Text(service.displayName).font(.body.weight(.medium))
-                Text(service.kind.title + (service.detail.map { "  ·  \($0)" } ?? ""))
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(service.serviceName)
+                    .font(.body.weight(.semibold))
+                    .lineLimit(1)
+                    .help(service.serviceName)
+                Text(service.identifier)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .textSelection(.enabled)
+                    .help(service.identifier)
+                Text(serviceMetadata(service))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
             }
             Spacer()
             StatusBadge(state: service.state)
@@ -107,13 +118,20 @@ struct RunnerLocalServicesView: View {
                 Button("日志") {
                     Task {
                         let text = await store.localServiceLogs(service)
-                        logPresentation = ServiceLogPresentation(title: "\(service.displayName) 日志", text: text)
+                        logPresentation = ServiceLogPresentation(title: "\(service.serviceName) 日志", text: text)
                     }
                 }.buttonStyle(.bordered)
             }
         }
         .controlSize(.small)
-        .padding(.horizontal, 18).frame(minHeight: 64)
+        .padding(.horizontal, 18).frame(minHeight: 78)
+    }
+
+    private func serviceMetadata(_ service: RunnerService) -> String {
+        var values = [service.kind.title, service.isSystemService ? "系统范围" : "当前用户"]
+        if let instanceName = service.instanceName { values.append("运行器：\(instanceName)") }
+        if let detail = service.detail, !detail.isEmpty { values.append(detail) }
+        return values.joined(separator: "  ·  ")
     }
 }
 
@@ -190,15 +208,19 @@ private struct RunnerAddServiceView: View {
                                 Image(systemName: service.kind == .homebrew ? "shippingbox" : "gearshape.2")
                                     .foregroundStyle(runnerStatusColor(service.state)).frame(width: 28)
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(service.displayName).font(.subheadline.weight(.medium))
-                                    Text(service.identifier + (service.detail.map { "  ·  \($0)" } ?? ""))
-                                        .font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
+                                    Text(service.serviceName).font(.subheadline.weight(.medium))
+                                    Text(service.identifier)
+                                        .font(.caption2.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+                                    Text(service.kind.title
+                                         + (service.instanceName.map { "  ·  运行器：\($0)" } ?? "")
+                                         + (service.detail.map { "  ·  \($0)" } ?? ""))
+                                        .font(.caption2).foregroundStyle(.tertiary)
                                 }
                                 Spacer()
                                 StatusBadge(state: service.state)
                                 Button("添加") { add(service) }.buttonStyle(.bordered).controlSize(.small)
                             }
-                            .padding(.horizontal, 10).frame(minHeight: 54)
+                            .padding(.horizontal, 10).frame(minHeight: 66)
                             Divider().padding(.leading, 48)
                         }
                     }
@@ -243,7 +265,7 @@ private struct RunnerAddServiceView: View {
     private func add(_ service: RunnerService) {
         store.addManagedService(RunnerManagedService(
             identifier: service.identifier,
-            displayName: service.displayName,
+            displayName: service.serviceName,
             kind: service.kind,
             isSystemService: service.isSystemService
         ))

@@ -55,20 +55,31 @@ final class LaunchpadIconProvider {
     }
 
     private func websiteImage(iconReference: String?, rawURL: String) async -> NSImage? {
-        let iconURL: URL?
         if let iconReference, let explicitURL = URL(string: iconReference) {
-            iconURL = explicitURL
-        } else if let websiteURL = LaunchpadOpenService.normalizedWebsiteURL(from: rawURL),
-                  var components = URLComponents(url: websiteURL, resolvingAgainstBaseURL: false) {
+            if let image = await downloadImage(from: explicitURL) { return image }
+        }
+
+        guard let websiteURL = LaunchpadOpenService.normalizedWebsiteURL(from: rawURL) else { return nil }
+        var iconURLs = await WebsiteMetadataService.metadata(for: websiteURL)?.iconURLs ?? []
+        if let iconReference, let explicitURL = URL(string: iconReference) {
+            iconURLs.removeAll { $0 == explicitURL }
+        }
+        if var components = URLComponents(url: websiteURL, resolvingAgainstBaseURL: false) {
             components.path = "/favicon.ico"
             components.query = nil
             components.fragment = nil
-            iconURL = components.url
-        } else {
-            iconURL = nil
+            if let fallbackURL = components.url, !iconURLs.contains(fallbackURL) {
+                iconURLs.append(fallbackURL)
+            }
         }
 
-        guard let iconURL else { return nil }
+        for iconURL in iconURLs {
+            if let image = await downloadImage(from: iconURL) { return image }
+        }
+        return nil
+    }
+
+    private func downloadImage(from iconURL: URL) async -> NSImage? {
         do {
             var request = URLRequest(url: iconURL)
             request.timeoutInterval = 5

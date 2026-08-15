@@ -664,6 +664,29 @@ final class LaunchpadLayoutEngineTests: XCTestCase {
         XCTAssertNotEqual(first.iconCacheKey, second.iconCacheKey)
     }
 
+    func testWebsiteMetadataParsesTitleAndPrefersLargestIcon() {
+        let html = """
+        <html><head>
+          <title> Example &amp; Tools </title>
+          <link rel="icon" sizes="32x32" href="/favicon-32.png">
+          <link href='/touch.png' rel='apple-touch-icon' sizes='180x180'>
+          <link rel="icon" type="image/svg+xml" href="icons/mark.svg">
+        </head></html>
+        """
+
+        let metadata = WebsiteMetadataService.parse(
+            html: html,
+            baseURL: URL(string: "https://example.com/path/page")!
+        )
+
+        XCTAssertEqual(metadata.title, "Example & Tools")
+        XCTAssertEqual(metadata.iconURLs.map(\.absoluteString), [
+            "https://example.com/path/icons/mark.svg",
+            "https://example.com/touch.png",
+            "https://example.com/favicon-32.png",
+        ])
+    }
+
     func testInvalidBookmarkAndWebsiteAreRejected() {
         XCTAssertThrowsError(try SecurityScopedBookmarkService.resolve(Data([0, 1, 2])))
         XCTAssertNil(LaunchpadOpenService.normalizedWebsiteURL(from: "://"))

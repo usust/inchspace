@@ -80,7 +80,21 @@ final class RunnerTests: XCTestCase {
         let runner = services.first { $0.identifier == "actions.runner.usust-inchspace.MacbookProM2Max" }
         XCTAssertEqual(runner?.state, .running)
         XCTAssertEqual(runner?.detail, "PID 672")
+        XCTAssertEqual(runner?.serviceName, "usust-inchspace")
+        XCTAssertEqual(runner?.instanceName, "MacbookProM2Max")
         XCTAssertEqual(services.first { $0.identifier == "com.example.stopped" }?.state, .stopped)
+    }
+
+    func testOrdinaryServiceKeepsItsDisplayName() {
+        let service = RunnerService(
+            identifier: "com.example.worker",
+            displayName: "Worker",
+            kind: .launchd,
+            state: .running
+        )
+
+        XCTAssertEqual(service.serviceName, "Worker")
+        XCTAssertNil(service.instanceName)
     }
 
     func testShortTaskCapturesLogsAndExitCode() async throws {

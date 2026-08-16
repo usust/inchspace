@@ -16,6 +16,7 @@ struct ContentView: View {
     @StateObject private var runnerStore: RunnerStore
     @StateObject private var serverManager: ServerManager
     @StateObject private var terminalManager: TerminalManager
+    @StateObject private var remoteFileModel: RemoteFileViewModel
     private let environmentService: EnvironmentVariableService
     @State private var selection: SidebarDestination? = .workspace
     @Environment(\.scenePhase) private var scenePhase
@@ -30,6 +31,7 @@ struct ContentView: View {
         _runnerStore = StateObject(wrappedValue: RunnerStore())
         _serverManager = StateObject(wrappedValue: ServerManager())
         _terminalManager = StateObject(wrappedValue: TerminalManager())
+        _remoteFileModel = StateObject(wrappedValue: RemoteFileViewModel())
     }
 
     var body: some View {
@@ -84,11 +86,15 @@ struct ContentView: View {
             RunnerView(store: runnerStore)
         case .servers:
             ServerManagerView(manager: serverManager)
+        case .remoteFiles:
+            RemoteFileView(model: remoteFileModel, serverManager: serverManager)
         case .environmentVariables:
             EnvironmentVariableView(service: environmentService, terminalManager: terminalManager)
         case .terminal:
             TerminalView(manager: terminalManager, serverManager: serverManager)
-        case .text, .image, .conversion, .developer:
+        case .developer:
+            DeveloperToolsView()
+        case .text, .image, .conversion:
             ContentUnavailableView(
                 destination.title,
                 systemImage: destination.systemImage,

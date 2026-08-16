@@ -184,6 +184,7 @@ final class AppVisibilityController: NSObject, ObservableObject {
     private var statusItem: NSStatusItem?
     private let initializedWindows = NSHashTable<NSWindow>.weakObjects()
     private var hasStarted = false
+    private var hasScheduledStateRefresh = false
 
     private override init() {
         preferences = AppWindowPreferences()
@@ -200,7 +201,7 @@ final class AppVisibilityController: NSObject, ObservableObject {
         applyActivationPolicy()
         updateStatusItem()
         registerStoredShortcut()
-        refreshState()
+        scheduleStateRefresh()
     }
 
     func registerMainWindow(_ window: NSWindow) {
@@ -247,7 +248,7 @@ final class AppVisibilityController: NSObject, ObservableObject {
                 applyInitialPosition(to: window)
             }
         }
-        refreshState()
+        scheduleStateRefresh()
     }
 
     func registerWindowOpeningAction(_ action: @escaping () -> Void) {
@@ -441,35 +442,51 @@ final class AppVisibilityController: NSObject, ObservableObject {
     }
 
     @objc private func windowBecameUnavailable(_ notification: Notification) {
-        state = .background
+        scheduleStateRefresh()
     }
 
     @objc private func applicationDidHide(_ notification: Notification) {
-        state = .hidden
+        scheduleStateRefresh()
     }
 
     @objc private func applicationDidUnhide(_ notification: Notification) {
-        refreshState()
+        scheduleStateRefresh()
     }
 
     @objc private func applicationDidBecomeActive(_ notification: Notification) {
-        refreshState()
+        scheduleStateRefresh()
     }
 
     @objc private func applicationDidResignActive(_ notification: Notification) {
-        if !NSApp.isHidden { state = .background }
+        scheduleStateRefresh()
+    }
+
+    /// AppKit can deliver window and application notifications while SwiftUI is
+    /// reconciling a view tree. Coalesce those notifications and publish after
+    /// the current update pass has completed.
+    private func scheduleStateRefresh() {
+        guard !hasScheduledStateRefresh else { return }
+        hasScheduledStateRefresh = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.hasScheduledStateRefresh = false
+            self.refreshState()
+        }
     }
 
     private func refreshState() {
+        let newState: AppVisibilityState
         if NSApp.isHidden {
-            state = .hidden
+            newState = .hidden
         } else if NSApp.isActive,
                   mainWindow?.isVisible == true,
                   mainWindow?.isMiniaturized == false {
-            state = .visible
+            newState = .visible
         } else {
-            state = .background
+            newState = .background
         }
+        guard state != newState else { return }
+        state = newState
     }
 
     private func show(_ window: NSWindow, animated: Bool) {

@@ -158,6 +158,7 @@ private struct RunnerAddServiceView: View {
                 service.identifier,
                 service.detail ?? "",
                 service.kind.title,
+                service.isSystemService ? "系统范围" : "当前用户",
                 service.state.title
             ]
             .joined(separator: " ")
@@ -212,6 +213,7 @@ private struct RunnerAddServiceView: View {
                                     Text(service.identifier)
                                         .font(.caption2.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
                                     Text(service.kind.title
+                                         + (service.isSystemService ? "  ·  系统范围" : "  ·  当前用户")
                                          + (service.instanceName.map { "  ·  运行器：\($0)" } ?? "")
                                          + (service.detail.map { "  ·  \($0)" } ?? ""))
                                         .font(.caption2).foregroundStyle(.tertiary)
@@ -230,7 +232,7 @@ private struct RunnerAddServiceView: View {
                 DisclosureGroup("找不到服务？按标识高级添加", isExpanded: $showsManualEntry) {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
-                            TextField("服务标识，例如 actions.runner.example", text: $manualEntry)
+                            TextField("服务标识，例如 ddns-go 或 actions.runner.example", text: $manualEntry)
                                 .textFieldStyle(.roundedBorder)
                             Picker("类型", selection: $kind) {
                                 Text("macOS 服务").tag(RunnerServiceKind.launchd)
@@ -274,10 +276,6 @@ private struct RunnerAddServiceView: View {
     private func addManual() {
         guard let identifier = RunnerServiceIdentifierParser.parse(manualEntry) else {
             errorMessage = "请输入有效的服务标识，或粘贴 launchctl list 中的一整行。"
-            return
-        }
-        guard kind != .launchd || identifier.contains(".") else {
-            errorMessage = "macOS 服务标识通常包含点号。若只知道关键词，请使用上方搜索，不要在这里添加。"
             return
         }
         let displayName = identifier.split(separator: ".").last.map(String.init) ?? identifier

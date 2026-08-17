@@ -98,6 +98,10 @@ struct LocalRunnerServiceManager: RunnerServiceManaging {
     private func performLaunchd(_ action: String, service: RunnerService) async throws {
         let domain = service.isSystemService ? "system" : "gui/\(getuid())"
         let target = "\(domain)/\(service.identifier)"
+        if service.isSystemService {
+            try await performPrivilegedLaunchd(action, target: target)
+            return
+        }
         switch action {
         case "start":
             try await requireLaunchctlSuccess(["enable", target])
@@ -116,6 +120,44 @@ struct LocalRunnerServiceManager: RunnerServiceManaging {
         }
     }
 
+    private func performPrivilegedLaunchd(_ action: String, target: String) async throws {
+        guard ["start", "stop", "restart"].contains(action) else {
+            throw RunnerError.processFailed("不支持的服务操作。")
+        }
+        // Only the fixed action and launchd target enter the privileged shell command. The
+        // target is passed as argv and shell-quoted by AppleScript, so service labels cannot
+        // inject additional commands.
+        let script = """
+        on run argv
+            set requestedAction to item 1 of argv
+            set serviceTarget to quoted form of (item 2 of argv)
+            if requestedAction is "start" then
+                set commandText to "/bin/launchctl enable " & serviceTarget & " && /bin/launchctl kickstart " & serviceTarget
+            else if requestedAction is "stop" then
+                set commandText to "/bin/launchctl disable " & serviceTarget & " && (/bin/launchctl kill SIGTERM " & serviceTarget & " 2>/dev/null || true)"
+            else if requestedAction is "restart" then
+                set commandText to "/bin/launchctl kickstart -k " & serviceTarget
+            else
+                error "Unsupported service action"
+            end if
+            do shell script commandText with administrator privileges
+        end run
+        """
+        let result = try await RunnerCommandExecutor.run(
+            executable: "/usr/bin/osascript",
+            arguments: ["-e", script, action, target]
+        )
+        guard result.exitCode == 0 else {
+            let message = result.error.trimmingCharacters(in: .whitespacesAndNewlines)
+            if message.localizedCaseInsensitiveContains("user canceled")
+                || message.localizedCaseInsensitiveContains("user cancelled")
+                || message.contains("(-128)") {
+                throw RunnerError.processFailed("已取消管理员授权。")
+            }
+            throw RunnerError.processFailed(message.isEmpty ? "管理员授权失败。" : message)
+        }
+    }
+
     private func requireLaunchctlSuccess(_ arguments: [String]) async throws {
         let result = try await RunnerCommandExecutor.run(executable: "/bin/launchctl", arguments: arguments)
         guard result.exitCode == 0 else {
@@ -124,25 +166,53 @@ struct LocalRunnerServiceManager: RunnerServiceManaging {
     }
 
     private func launchdServices(includeAppleServices: Bool) async throws -> [RunnerService] {
-        // On current macOS versions `launchctl list` can return an empty stream to a
-        // sandboxed app, while printing the GUI domain still exposes its service table.
-        let domainResult = try await RunnerCommandExecutor.run(
+        // Query both bootstrap domains. LaunchDaemons such as ddns-go live in `system`,
+        // while per-user LaunchAgents live in `gui/<uid>`.
+        let guiResult = try await RunnerCommandExecutor.run(
             executable: "/bin/launchctl",
             arguments: ["print", "gui/\(getuid())"]
         )
-        if domainResult.exitCode == 0 {
-            let services = Self.parseLaunchdDomain(domainResult.output, includeAppleServices: includeAppleServices)
-            if !services.isEmpty { return services }
+        var services = guiResult.exitCode == 0
+            ? Self.parseLaunchdDomain(
+                guiResult.output,
+                includeAppleServices: includeAppleServices,
+                isSystemService: false
+            )
+            : []
+
+        // On current macOS versions `launchctl list` can return an empty stream to a
+        // sandboxed app. Keep it only as a fallback for the current user's GUI domain.
+        if services.isEmpty {
+            let legacyResult = try await RunnerCommandExecutor.run(executable: "/bin/launchctl", arguments: ["list"])
+            if legacyResult.exitCode == 0 {
+                services = Self.parseLaunchdDomain(
+                    legacyResult.output,
+                    includeAppleServices: includeAppleServices,
+                    isSystemService: false
+                )
+            }
         }
 
-        let legacyResult = try await RunnerCommandExecutor.run(executable: "/bin/launchctl", arguments: ["list"])
-        guard legacyResult.exitCode == 0 else { return [] }
-        return Self.parseLaunchdDomain(legacyResult.output, includeAppleServices: includeAppleServices)
+        let systemResult = try await RunnerCommandExecutor.run(
+            executable: "/bin/launchctl",
+            arguments: ["print", "system"]
+        )
+        if systemResult.exitCode == 0 {
+            services.append(contentsOf: Self.parseLaunchdDomain(
+                systemResult.output,
+                includeAppleServices: includeAppleServices,
+                isSystemService: true
+            ))
+        }
+
+        var seen = Set<String>()
+        return services.filter { seen.insert($0.id).inserted }
     }
 
     nonisolated static func parseLaunchdDomain(
         _ output: String,
-        includeAppleServices: Bool
+        includeAppleServices: Bool,
+        isSystemService: Bool = false
     ) -> [RunnerService] {
         var seen = Set<String>()
         return output.split(separator: "\n").compactMap { line in
@@ -155,12 +225,21 @@ struct LocalRunnerServiceManager: RunnerServiceManaging {
                   (includeAppleServices || !label.hasPrefix("com.apple.")),
                   seen.insert(label).inserted else { return nil }
             let pid = rawPID > 0 ? rawPID : nil
+            let lastExitStatus = Int(columns[1])
+            let state: RunnerServiceState = if pid != nil {
+                .running
+            } else if let lastExitStatus, lastExitStatus != 0 {
+                .failed
+            } else {
+                .stopped
+            }
             return RunnerService(
                 identifier: label,
                 displayName: label.split(separator: ".").last.map(String.init) ?? label,
                 kind: .launchd,
-                state: pid == nil ? .stopped : .running,
-                detail: pid.map { "PID \($0)" }
+                state: state,
+                detail: pid.map { "PID \($0)" },
+                isSystemService: isSystemService
             )
         }
     }

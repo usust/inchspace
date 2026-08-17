@@ -83,6 +83,42 @@ final class RunnerTests: XCTestCase {
         XCTAssertEqual(runner?.serviceName, "usust-inchspace")
         XCTAssertEqual(runner?.instanceName, "MacbookProM2Max")
         XCTAssertEqual(services.first { $0.identifier == "com.example.stopped" }?.state, .stopped)
+        XCTAssertEqual(runner?.isSystemService, false)
+    }
+
+    func testLaunchctlSystemPrintMarksLaunchDaemonAsSystemService() {
+        let output = """
+        system = {
+            services = {
+                     55538      0  ddns-go
+                         0      -  com.example.stopped
+            }
+        }
+        """
+
+        let services = LocalRunnerServiceManager.parseLaunchdDomain(
+            output,
+            includeAppleServices: true,
+            isSystemService: true
+        )
+        let ddns = services.first { $0.identifier == "ddns-go" }
+        XCTAssertEqual(ddns?.state, .running)
+        XCTAssertEqual(ddns?.detail, "PID 55538")
+        XCTAssertEqual(ddns?.isSystemService, true)
+        XCTAssertEqual(ddns?.id, "launchd:system:ddns-go")
+    }
+
+    func testLaunchctlNonzeroLastExitStatusIsFailed() {
+        let output = """
+        gui/501 = {
+            services = {
+                0  78  com.example.failed
+            }
+        }
+        """
+
+        let services = LocalRunnerServiceManager.parseLaunchdDomain(output, includeAppleServices: true)
+        XCTAssertEqual(services.first?.state, .failed)
     }
 
     func testOrdinaryServiceKeepsItsDisplayName() {

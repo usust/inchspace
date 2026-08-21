@@ -145,14 +145,17 @@ struct ServerDashboardView: View {
     }
 
     private var toolbar: some View {
-        HStack(spacing: 10) {
-            Text(selectedServer == nil ? "服务器" : "服务器详情")
-                .font(.system(size: 26, weight: .bold, design: .rounded))
+        HStack(spacing: AppLayout.featureHeaderSpacing) {
+            AppFeatureTitle(
+                selectedServer == nil ? "服务器" : "服务器详情",
+                subtitle: "远程资产与 SSH 连接管理"
+            )
 
             Spacer(minLength: 16)
 
             Button("快速连接", systemImage: "bolt.fill") { showsQuickConnect = true }
-                .buttonStyle(DashboardToolbarButtonStyle())
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
 
             Button {
                 editingServer = nil
@@ -160,7 +163,8 @@ struct ServerDashboardView: View {
             } label: {
                 Label("添加服务器", systemImage: "plus.circle.fill")
             }
-            .buttonStyle(DashboardToolbarButtonStyle(tinted: true))
+            .buttonStyle(.glassProminent)
+            .buttonBorderShape(.capsule)
 
             Menu {
                 Toggle("定时检测（每 5 分钟）", isOn: $manager.periodicChecksEnabled)
@@ -175,14 +179,11 @@ struct ServerDashboardView: View {
                 Image(systemName: "ellipsis.circle").frame(width: 18, height: 18)
             }
             .menuStyle(.borderlessButton)
-            .buttonStyle(DashboardToolbarButtonStyle(iconOnly: true))
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            .help("服务器操作")
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 15)
-        .background(.ultraThinMaterial.opacity(0.52))
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(Color.primary.opacity(0.055)).frame(height: 1)
-        }
+        .appFeatureHeaderBackground(opacity: 0.52)
     }
 
     private var emptyState: some View {
@@ -808,28 +809,5 @@ private struct DashboardBackground: View {
                 .offset(x: 260, y: -240)
         }
         .ignoresSafeArea()
-    }
-}
-
-private struct DashboardToolbarButtonStyle: ButtonStyle {
-    var tinted = false
-    var iconOnly = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.callout.weight(.medium))
-            .foregroundStyle(tinted ? Color.white : Color.primary)
-            .padding(.horizontal, iconOnly ? 9 : 12)
-            .frame(height: 36)
-            .background(
-                tinted ? Color.accentColor.opacity(configuration.isPressed ? 0.78 : 0.9) : Color.primary.opacity(configuration.isPressed ? 0.10 : 0.055),
-                in: RoundedRectangle(cornerRadius: 11, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .strokeBorder(Color.white.opacity(tinted ? 0.2 : 0.13), lineWidth: 0.7)
-            }
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(.snappy(duration: 0.16), value: configuration.isPressed)
     }
 }

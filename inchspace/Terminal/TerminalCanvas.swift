@@ -62,6 +62,7 @@ final class TerminalContainerView: NSView {
     private let mountOrder: UInt64
     private weak var terminal: LocalProcessTerminalView?
     private var mouseMonitor: Any?
+    private(set) var appliedTerminalFrameUpdates = 0
 
     override var mouseDownCanMoveWindow: Bool { false }
 
@@ -89,7 +90,7 @@ final class TerminalContainerView: NSView {
         guard claimMount(for: terminalView) else { return }
 
         guard terminal !== terminalView || terminalView.superview !== self else {
-            terminalView.frame = TerminalContentLayout.contentFrame(in: bounds)
+            updateTerminalFrame(terminalView)
             return
         }
 
@@ -108,7 +109,7 @@ final class TerminalContainerView: NSView {
         // its new (left-hand) pane and leave that pane blank.
         (terminalView.superview as? TerminalContainerView)?.relinquish(terminalView)
         terminalView.removeFromSuperview()
-        terminalView.frame = TerminalContentLayout.contentFrame(in: bounds)
+        updateTerminalFrame(terminalView)
         terminalView.autoresizingMask = []
         addSubview(terminalView)
         terminal = terminalView
@@ -131,8 +132,15 @@ final class TerminalContainerView: NSView {
     override func layout() {
         super.layout()
         if let terminal, ownsMount(for: terminal), terminal.superview === self {
-            terminal.frame = TerminalContentLayout.contentFrame(in: bounds)
+            updateTerminalFrame(terminal)
         }
+    }
+
+    private func updateTerminalFrame(_ terminalView: LocalProcessTerminalView) {
+        let frame = TerminalContentLayout.contentFrame(in: bounds)
+        guard terminalView.frame != frame else { return }
+        terminalView.frame = frame
+        appliedTerminalFrameUpdates += 1
     }
 
     private func installMouseMonitor() {

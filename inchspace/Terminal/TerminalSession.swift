@@ -87,6 +87,9 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     @Published private(set) var paneLayout: TerminalPaneLayout
     @Published private(set) var activePaneID: UUID
     @Published private(set) var maximizedPaneID: UUID?
+    @Published private(set) var lastAICommand: String?
+    @Published private(set) var lastAIExitCode: Int?
+    var onAskAISelection: ((String, UUID) -> Void)?
 
     private let configurationProvider: (String?) throws -> TerminalProcessConfiguration
     private weak var preferences: TerminalPreferences?
@@ -96,6 +99,7 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     private var reconnectTasks: [UUID: Task<Void, Never>] = [:]
     private var reconnectAttempts: [UUID: Int] = [:]
     private var appearanceSignatures: [UUID: TerminalAppearanceSignature] = [:]
+    private var commandCompletions: [UUID: (Result<Int, Error>) -> Void] = [:]
 
     init(
         id: UUID = UUID(),
@@ -209,6 +213,43 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     func clearScrollback() { activePane.clearScrollback() }
     func showSearch() { activePane.showSearch() }
 
+    var selectedText: String? {
+        guard let view = activePane.terminalView as? SessionTerminalView,
+              view.selection.active else { return nil }
+        let text = view.selection.getSelectedText().trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
+    }
+
+    var recentOutput: String? {
+        (activePane.terminalView as? SessionTerminalView)?.recentOutput
+    }
+
+    func insert(command: String) throws {
+        guard activePane.isRunning else { throw TerminalAIError.sessionUnavailable }
+        let bytes = Array(command.utf8)
+        activePane.terminalView.send(source: activePane.terminalView, data: bytes[...])
+        activePane.focus()
+    }
+
+    func run(command: String, completion: @escaping (Result<Int, Error>) -> Void) throws {
+        guard activePane.isRunning else { throw TerminalAIError.sessionUnavailable }
+        let commandID = UUID()
+        commandCompletions[commandID] = completion
+        lastAICommand = command
+        lastAIExitCode = nil
+        let wrapped = "{\n\(command)\n}; __inchspace_ai_status=$?; printf '\\033]1337;inchspaceAIExit=\(commandID.uuidString):%s\\007' \"$__inchspace_ai_status\"\r"
+        let bytes = Array(wrapped.utf8)
+        (activePane.terminalView as? SessionTerminalView)?.isProgrammaticAIWrite = true
+        activePane.terminalView.send(source: activePane.terminalView, data: bytes[...])
+        (activePane.terminalView as? SessionTerminalView)?.isProgrammaticAIWrite = false
+        activePane.focus()
+    }
+
+    func interruptActiveCommand() {
+        guard activePane.isRunning else { return }
+        activePane.terminalView.send(source: activePane.terminalView, data: [0x03][...])
+    }
+
     func increaseFontSize() {
         guard let preferences else { return }
         preferences.fontSize = min(18, preferences.fontSize + 1)
@@ -315,6 +356,9 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         } else {
             pane.connectionState = exitCode == 0 ? .disconnected : .error
         }
+        let error = TerminalAIError.sessionUnavailable
+        commandCompletions.values.forEach { $0(.failure(error)) }
+        commandCompletions.removeAll()
         objectWillChange.send()
     }
 
@@ -373,11 +417,25 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
     }
 
     private func configureTerminalCallbacks(for pane: TerminalPane) {
-        (pane.terminalView as? SessionTerminalView)?.onDataReceived = { [weak self, weak pane] in
+        guard let view = pane.terminalView as? SessionTerminalView else { return }
+        view.onDataReceived = { [weak self, weak pane] in
             guard let self, let pane, self.kind.isRemote, pane.connectionState == .connecting else { return }
             self.reconnectAttempts[pane.id] = 0
             pane.connectionState = .connected
             self.objectWillChange.send()
+        }
+        view.onAskAI = { [weak self, weak pane] selection in
+            guard let self, let pane else { return }
+            self.activate(pane)
+            self.onAskAISelection?(selection, self.id)
+        }
+        view.onCommandExit = { [weak self] commandID, exitCode in
+            guard let self else { return }
+            self.lastAIExitCode = exitCode
+            self.commandCompletions.removeValue(forKey: commandID)?(.success(exitCode))
+        }
+        view.onCommandSubmitted = { [weak self] command in
+            self?.lastAICommand = command
         }
     }
 
@@ -422,7 +480,13 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
 
 private final class SessionTerminalView: LocalProcessTerminalView {
     var onDataReceived: (() -> Void)?
+    var onAskAI: ((String) -> Void)?
+    var onCommandExit: ((UUID, Int) -> Void)?
+    var onCommandSubmitted: ((String) -> Void)?
     var automaticallyCopiesSelection = true
+    var isProgrammaticAIWrite = false
+    private(set) var recentOutput = ""
+    private var markerBuffer = ""
     private let searchButtonCursorOwner = SearchButtonCursorOwner()
     private let searchFieldCursorOwner = SearchFieldCursorOwner()
     private var searchButtonTrackingAreas: [ObjectIdentifier: (NSButton, NSTrackingArea)] = [:]
@@ -438,7 +502,17 @@ private final class SessionTerminalView: LocalProcessTerminalView {
 
     override func dataReceived(slice: ArraySlice<UInt8>) {
         super.dataReceived(slice: slice)
+        if let text = String(bytes: slice, encoding: .utf8) {
+            recentOutput += text
+            if recentOutput.count > 24_000 { recentOutput = String(recentOutput.suffix(20_000)) }
+            inspectCommandMarkers(text)
+        }
         onDataReceived?()
+    }
+
+    override func send(source: SwiftTerm.Terminal, data: ArraySlice<UInt8>) {
+        if !isProgrammaticAIWrite { captureSubmittedCommand(data) }
+        super.send(source: source, data: data)
     }
 
     func clearTerminalScreen() {
@@ -470,12 +544,55 @@ private final class SessionTerminalView: LocalProcessTerminalView {
         menu.addItem(NSMenuItem.separator())
         menu.addItem(withTitle: "全选", action: #selector(selectAll(_:)), keyEquivalent: "")
         menu.addItem(withTitle: "清空", action: #selector(clearFromMenu(_:)), keyEquivalent: "")
+        if selection.active, !selection.getSelectedText().isEmpty {
+            menu.addItem(NSMenuItem.separator())
+            menu.addItem(withTitle: "询问 AI", action: #selector(askAIFromMenu(_:)), keyEquivalent: "")
+        }
         menu.items.forEach { $0.target = self }
         return menu
     }
 
     @objc private func clearFromMenu(_ sender: Any?) {
         clearTerminalScreen()
+    }
+
+    @objc private func askAIFromMenu(_ sender: Any?) {
+        let text = selection.getSelectedText()
+        guard !text.isEmpty else { return }
+        onAskAI?(text)
+    }
+
+    private func inspectCommandMarkers(_ text: String) {
+        markerBuffer = String((markerBuffer + text).suffix(2_000))
+        let pattern = #"inchspaceAIExit=([0-9A-Fa-f-]{36}):(-?\d+)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return }
+        let ns = markerBuffer as NSString
+        let matches = regex.matches(in: markerBuffer, range: NSRange(location: 0, length: ns.length))
+        for match in matches {
+            guard let id = UUID(uuidString: ns.substring(with: match.range(at: 1))),
+                  let code = Int(ns.substring(with: match.range(at: 2))) else { continue }
+            onCommandExit?(id, code)
+        }
+        if !matches.isEmpty { markerBuffer = "" }
+    }
+
+    private var inputBuffer = ""
+    private func captureSubmittedCommand(_ data: ArraySlice<UInt8>) {
+        for byte in data {
+            switch byte {
+            case 0x0d, 0x0a:
+                let command = inputBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !command.isEmpty { onCommandSubmitted?(command) }
+                inputBuffer = ""
+            case 0x08, 0x7f:
+                if !inputBuffer.isEmpty { inputBuffer.removeLast() }
+            case 0x20...0x7e:
+                inputBuffer.append(Character(UnicodeScalar(byte)))
+            default:
+                break
+            }
+        }
+        if inputBuffer.count > 4_000 { inputBuffer = String(inputBuffer.suffix(4_000)) }
     }
 
     private func updateSearchButtonCursorTracking() {

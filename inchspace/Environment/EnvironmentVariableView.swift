@@ -77,11 +77,8 @@ struct EnvironmentVariableView: View {
     }
 
     private var toolbar: some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("环境变量").font(.system(size: 26, weight: .bold, design: .rounded))
-                Text("管理本机开发环境变量").font(.caption).foregroundStyle(.secondary)
-            }
+        HStack(spacing: AppLayout.featureHeaderSpacing) {
+            AppFeatureTitle("环境变量", subtitle: "管理本机开发环境变量")
             Spacer(minLength: 18)
             Picker("来源", selection: $model.sourceFilter) {
                 ForEach(model.sourceFilters) { filter in
@@ -117,9 +114,7 @@ struct EnvironmentVariableView: View {
             }
             .menuStyle(.borderlessButton).help("更多操作")
         }
-        .padding(.horizontal, 24).padding(.vertical, 15)
-        .background(.ultraThinMaterial.opacity(0.54))
-        .overlay(alignment: .bottom) { Rectangle().fill(Color.primary.opacity(0.055)).frame(height: 1) }
+        .appFeatureHeaderBackground(opacity: 0.54)
     }
 
     @ViewBuilder

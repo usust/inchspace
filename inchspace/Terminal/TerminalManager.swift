@@ -8,10 +8,30 @@ final class TerminalManager: ObservableObject {
     @Published var selectedSessionID: UUID?
 
     let preferences: TerminalPreferences
+    let aiSettings: TerminalAISettings
+    let aiCopilot: TerminalAICopilotController
     private var sessionObservers: [UUID: AnyCancellable] = [:]
 
     init(preferences: TerminalPreferences? = nil) {
         self.preferences = preferences ?? TerminalPreferences()
+        let aiSettings = TerminalAISettings()
+        self.aiSettings = aiSettings
+        self.aiCopilot = TerminalAICopilotController(settings: aiSettings)
+        aiCopilot.contextBuilder = { [weak self] sessionID, selection in
+            guard let self else { return nil }
+            return await self.buildAIContext(sessionID: sessionID, selection: selection)
+        }
+        aiCopilot.insertHandler = { [weak self] command, sessionID in
+            guard let session = self?.session(id: sessionID) else { throw TerminalAIError.sessionUnavailable }
+            try session.insert(command: command)
+        }
+        aiCopilot.runHandler = { [weak self] command, sessionID, completion in
+            guard let session = self?.session(id: sessionID) else { throw TerminalAIError.sessionUnavailable }
+            try session.run(command: command, completion: completion)
+        }
+        aiCopilot.interruptHandler = { [weak self] sessionID in
+            self?.session(id: sessionID)?.interruptActiveCommand()
+        }
     }
 
     var selectedSession: TerminalSession? {
@@ -42,6 +62,7 @@ final class TerminalManager: ObservableObject {
         }
         sessions.append(session)
         observe(session)
+        configureAI(for: session)
         selectedSessionID = session.id
         return session
     }
@@ -56,6 +77,7 @@ final class TerminalManager: ObservableObject {
         guard let index = sessions.firstIndex(where: { $0.id == session.id }) else { return }
         session.terminate()
         sessions.remove(at: index)
+        aiCopilot.removeConversation(for: session.id)
         sessionObservers[session.id] = nil
         if selectedSessionID == session.id {
             selectedSessionID = sessions.indices.contains(index)
@@ -145,6 +167,7 @@ final class TerminalManager: ObservableObject {
         }
         sessions.append(session)
         observe(session)
+        configureAI(for: session)
         if selects { selectedSessionID = session.id }
         return session
     }
@@ -182,5 +205,76 @@ final class TerminalManager: ObservableObject {
         sessionObservers[session.id] = session.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
+    }
+
+    private func configureAI(for session: TerminalSession) {
+        session.onAskAISelection = { [weak self] selection, sessionID in
+            guard let self else { return }
+            self.select(sessionID)
+            self.aiCopilot.askAI(selection: selection, sessionID: sessionID)
+        }
+    }
+
+    private func buildAIContext(sessionID: UUID, selection: String?) async -> TerminalAIContext? {
+        guard let session = session(id: sessionID) else { return nil }
+        let settings = aiSettings
+        let includeAutomaticContext = settings.terminalContextEnabled
+        let shell: String?
+        let remoteHost: String?
+        let username: String?
+        let hostname: String?
+        let type: String
+        switch session.kind {
+        case .local(let value):
+            shell = URL(fileURLWithPath: value).lastPathComponent
+            remoteHost = nil
+            username = NSUserName()
+            hostname = Host.current().localizedName
+            type = "local"
+        case .ssh(_, let endpoint):
+            shell = nil
+            remoteHost = endpoint
+            let endpointParts = endpoint.split(separator: "@", maxSplits: 1).map(String.init)
+            username = endpointParts.count == 2 ? endpointParts[0] : nil
+            hostname = endpointParts.count == 2
+                ? endpointParts[1].split(separator: ":").first.map(String.init)
+                : endpoint
+            type = "ssh"
+        }
+        let rawOutput = includeAutomaticContext && settings.recentOutputEnabled ? session.recentOutput : nil
+        let rawSelection = selection.map { String($0.prefix(20_000)) }
+        if !includeAutomaticContext && rawSelection == nil { return nil }
+        let redact = settings.secretRedactionEnabled
+        let processed = await Task.detached(priority: .utility) {
+            let output = rawOutput.map(Self.cleanTerminalOutput)
+            return (
+                rawSelection.map { redact ? TerminalAISecretRedactor.redact($0) : $0 },
+                output.map { redact ? TerminalAISecretRedactor.redact($0) : $0 }
+            )
+        }.value
+        return TerminalAIContext(
+            includesSessionMetadata: includeAutomaticContext,
+            sessionID: session.id,
+            sessionType: type,
+            shell: includeAutomaticContext ? shell : nil,
+            workingDirectory: includeAutomaticContext ? session.workingDirectory : nil,
+            username: includeAutomaticContext ? username : nil,
+            hostname: includeAutomaticContext ? hostname : nil,
+            remoteHost: includeAutomaticContext ? remoteHost : nil,
+            selectedText: processed.0,
+            lastCommand: includeAutomaticContext ? session.lastAICommand : nil,
+            lastExitCode: includeAutomaticContext ? session.lastAIExitCode : nil,
+            recentOutput: includeAutomaticContext ? processed.1 : nil
+        )
+    }
+
+    nonisolated private static func cleanTerminalOutput(_ value: String) -> String {
+        var output = value
+        let patterns = [#"\u{001B}\[[0-?]*[ -/]*[@-~]"#, #"\u{001B}\][^\u{0007}]*(?:\u{0007}|\u{001B}\\)"#]
+        for pattern in patterns {
+            output = output.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
+        }
+        let lines = output.split(separator: "\n", omittingEmptySubsequences: false).suffix(200)
+        return String(lines.joined(separator: "\n").suffix(20_000))
     }
 }

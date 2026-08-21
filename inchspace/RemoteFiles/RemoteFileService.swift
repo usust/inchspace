@@ -13,6 +13,23 @@ final class RemoteFileService {
         return base.appending(path: "inchspace/RemoteFiles", directoryHint: .isDirectory)
     }
     private static var knownHostsURL: URL { supportDirectory.appending(path: "known_hosts") }
+    private static let listingPattern = try? NSRegularExpression(
+        pattern: #"^([bcdlps-][rwxStTs-]{9}[+@.]?)\s+\S+\s+\S+\s+\S+\s+(\d+)\s+(\S+)\s+(\d{1,2})\s+(\S+)\s+(.+)$"#
+    )
+    private static let recentListingDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy MMM d HH:mm"
+        return formatter
+    }()
+    private static let historicalListingDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "MMM d yyyy"
+        return formatter
+    }()
     private static func controlPath(for server: Server) -> String {
         // Unix-domain socket paths are limited to roughly 100 bytes on macOS.
         // Keep this out of the much longer Application Support path.
@@ -309,9 +326,8 @@ final class RemoteFileService {
     static func parseListingLine(_ line: String, parent: String) -> FileItem? {
         // OpenSSH SFTP may print `?` instead of a numeric hard-link count.
         // Capture the date fields as well so the table can display them.
-        let pattern = #"^([bcdlps-][rwxStTs-]{9}[+@.]?)\s+\S+\s+\S+\s+\S+\s+(\d+)\s+(\S+)\s+(\d{1,2})\s+(\S+)\s+(.+)$"#
-        guard let regex = try? NSRegularExpression(pattern: pattern),
-              let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
+        guard let listingPattern,
+              let match = listingPattern.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
               match.numberOfRanges == 7,
               let p = Range(match.range(at: 1), in: line),
               let s = Range(match.range(at: 2), in: line),
@@ -350,14 +366,10 @@ final class RemoteFileService {
     }
 
     private static func parseListingDate(month: String, day: String, timeOrYear: String) -> Date? {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
         if timeOrYear.contains(":") {
             let calendar = Calendar.current
             let year = calendar.component(.year, from: Date())
-            formatter.dateFormat = "yyyy MMM d HH:mm"
-            guard var date = formatter.date(from: "\(year) \(month) \(day) \(timeOrYear)") else { return nil }
+            guard var date = recentListingDateFormatter.date(from: "\(year) \(month) \(day) \(timeOrYear)") else { return nil }
             // `ls` uses a time instead of a year for recent entries. Around New
             // Year, an entry from December can otherwise appear in the future.
             if date.timeIntervalSinceNow > 86_400,
@@ -366,8 +378,7 @@ final class RemoteFileService {
             }
             return date
         }
-        formatter.dateFormat = "MMM d yyyy"
-        return formatter.date(from: "\(month) \(day) \(timeOrYear)")
+        return historicalListingDateFormatter.date(from: "\(month) \(day) \(timeOrYear)")
     }
 
     private func quote(_ value: String) -> String { "\"" + value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\"" }

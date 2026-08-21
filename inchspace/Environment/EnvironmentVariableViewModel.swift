@@ -41,12 +41,15 @@ final class EnvironmentVariableViewModel: ObservableObject {
     }
 
     var sourceFilters: [EnvironmentSourceFilter] {
-        [.all, .process] + service.shellConfigURLs.map(EnvironmentSourceFilter.file)
+        [.all] + service.shellConfigURLs.map(EnvironmentSourceFilter.file)
     }
 
     func sources(for variable: EnvironmentVariable) -> [EnvironmentVariableSource] {
         switch sourceFilter {
-        case .all: variable.sources
+        // The process environment contains implementation details injected by
+        // macOS and Xcode. It is still used by the service as the inherited
+        // environment, but it is not a user-managed configuration source.
+        case .all: variable.sources.filter { !$0.isProcessEnvironment }
         case .process: variable.sources.filter(\.isProcessEnvironment)
         case let .file(url): variable.sources.filter { $0.fileURL?.standardizedFileURL == url.standardizedFileURL }
         }
@@ -54,8 +57,13 @@ final class EnvironmentVariableViewModel: ObservableObject {
 
     func displayedValue(for variable: EnvironmentVariable) -> String {
         switch sourceFilter {
-        case .all: variable.effectiveValue
-        case .process, .file: sources(for: variable).last?.value ?? variable.effectiveValue
+        case .all:
+            if variable.variableType == .path { return variable.effectiveValue }
+            let displayedSources = sources(for: variable)
+            return displayedSources.last(where: \.isEnabled)?.value
+                ?? displayedSources.last?.value
+                ?? variable.effectiveValue
+        case .process, .file: return sources(for: variable).last?.value ?? variable.effectiveValue
         }
     }
 

@@ -94,6 +94,8 @@ struct SettingsView: View {
 
             TerminalSettingsSection(manager: terminalManager)
 
+            TerminalAISettingsSection(settings: terminalManager.aiSettings)
+
             Section("iCloud 与数据") {
                 LabeledContent {
                     VStack(alignment: .trailing, spacing: 4) {

@@ -4,19 +4,43 @@ import SwiftUI
 struct TerminalView: View {
     @ObservedObject var manager: TerminalManager
     @ObservedObject var serverManager: ServerManager
+    @ObservedObject private var copilot: TerminalAICopilotController
     @State private var pendingClose: TerminalSession?
+
+    init(manager: TerminalManager, serverManager: ServerManager) {
+        self.manager = manager
+        self.serverManager = serverManager
+        self.copilot = manager.aiCopilot
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            if !manager.sessions.isEmpty {
-                TerminalTabBar(manager: manager, requestClose: requestClose)
-            }
-            Group {
-                if let session = manager.selectedSession {
-                    terminalWorkspace(primary: session)
-                } else {
-                    emptyState
+            GeometryReader { geometry in
+                HSplitView {
+                    VStack(spacing: 0) {
+                        if !manager.sessions.isEmpty {
+                            TerminalTabBar(manager: manager, requestClose: requestClose)
+                        }
+                        Group {
+                            if let session = manager.selectedSession {
+                                terminalWorkspace(primary: session)
+                            } else {
+                                emptyState
+                            }
+                        }
+                    }
+                    .frame(minWidth: 360)
+
+                    if copilot.isSidebarVisible, let session = manager.selectedSession {
+                        AICopilotSidebar(controller: copilot, session: session)
+                            .id(session.id)
+                    }
+                }
+                .onChange(of: geometry.size.width, initial: true) { _, width in
+                    if width < 720, copilot.isSidebarVisible {
+                        copilot.isSidebarVisible = false
+                    }
                 }
             }
         }
@@ -41,17 +65,22 @@ struct TerminalView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 16) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("终端")
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
-                Text("本机与远程 Shell")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+        HStack(alignment: .center, spacing: AppLayout.featureHeaderSpacing) {
+            AppFeatureTitle("终端", subtitle: "本机与远程 Shell")
             Spacer(minLength: 24)
 
             HStack(spacing: 8) {
+                Button {
+                    copilot.isSidebarVisible.toggle()
+                } label: {
+                    toolbarSymbol("sparkles")
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .help("打开或关闭 AI Copilot（⌘⇧A）")
+                .disabled(manager.selectedSession == nil)
+                .accessibilityLabel("AI Copilot")
+
                 Button {
                     manager.selectedSession?.showSearch()
                 } label: {
@@ -83,14 +112,8 @@ struct TerminalView: View {
             }
             .controlSize(.regular)
         }
-        .padding(.horizontal, 26)
-        .padding(.vertical, 11)
-        .frame(minHeight: 76)
-        .background(.ultraThinMaterial.opacity(0.62))
+        .appFeatureHeaderBackground(opacity: 0.62)
         .background(TerminalWindowDragRegion())
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(Color.primary.opacity(0.055)).frame(height: 1)
-        }
     }
 
     private func toolbarSymbol(_ name: String) -> some View {
@@ -226,6 +249,9 @@ struct TerminalView: View {
             Button("") { manager.selectedSession?.increaseFontSize() }.keyboardShortcut("+", modifiers: .command)
             Button("") { manager.selectedSession?.decreaseFontSize() }.keyboardShortcut("-", modifiers: .command)
             Button("") { manager.selectedSession?.resetFontSize() }.keyboardShortcut("0", modifiers: .command)
+            Button("") {
+                copilot.isSidebarVisible.toggle()
+            }.keyboardShortcut("a", modifiers: [.command, .shift])
         }
         .frame(width: 0, height: 0)
         .opacity(0)

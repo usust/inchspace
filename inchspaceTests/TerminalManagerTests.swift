@@ -216,6 +216,30 @@ final class TerminalManagerTests: XCTestCase {
         XCTAssertLessThan(session.terminalView.getTerminal().rows, initialRows)
     }
 
+    func testUnchangedTerminalLayoutDoesNotTriggerRepeatedGridResize() {
+        let (preferences, _) = makePreferences()
+        let manager = TerminalManager(preferences: preferences)
+        let session = manager.openLocalSession(directory: "/tmp")
+        let container = TerminalContainerView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
+
+        container.attach(session.terminalView)
+        container.layoutSubtreeIfNeeded()
+        let updatesAfterInitialLayout = container.appliedTerminalFrameUpdates
+
+        for _ in 0..<20 {
+            container.attach(session.terminalView)
+            container.needsLayout = true
+            container.layoutSubtreeIfNeeded()
+        }
+
+        XCTAssertGreaterThan(updatesAfterInitialLayout, 0)
+        XCTAssertEqual(
+            container.appliedTerminalFrameUpdates,
+            updatesAfterInitialLayout,
+            "侧栏状态刷新但终端可用区域未变化时，不应反复触发 SwiftTerm 网格 resize"
+        )
+    }
+
     func testMovingPrimaryTerminalToSplitContainerSurvivesOldContainerTeardown() {
         let (preferences, _) = makePreferences()
         let manager = TerminalManager(preferences: preferences)
@@ -350,6 +374,67 @@ final class TerminalManagerTests: XCTestCase {
         let preferences = TerminalPreferences(defaults: defaults)
 
         XCTAssertEqual(preferences.theme, .dracula)
+    }
+
+    func testAICommandRoutesBySessionIDInsteadOfSelectedTab() async throws {
+        let (preferences, suiteName) = makePreferences()
+        defer { UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName) }
+        let manager = TerminalManager(preferences: preferences)
+        let target = manager.openLocalSession(directory: "/tmp")
+        let selected = manager.openLocalSession(directory: "/tmp")
+        target.startIfNeeded()
+        selected.startIfNeeded()
+        defer { target.terminate(); selected.terminate() }
+        try await Task.sleep(for: .milliseconds(200))
+
+        manager.aiCopilot.runApproved("printf '__AI_SESSION_ROUTE_OK__\\n'", sessionID: target.id)
+
+        var targetBuffer = ""
+        var selectedBuffer = ""
+        for _ in 0..<40 {
+            targetBuffer = String(decoding: target.terminalView.getTerminal().getBufferAsData(), as: UTF8.self)
+            selectedBuffer = String(decoding: selected.terminalView.getTerminal().getBufferAsData(), as: UTF8.self)
+            if targetBuffer.contains("__AI_SESSION_ROUTE_OK__") { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertEqual(manager.selectedSessionID, selected.id)
+        XCTAssertTrue(targetBuffer.contains("__AI_SESSION_ROUTE_OK__"))
+        XCTAssertFalse(selectedBuffer.contains("__AI_SESSION_ROUTE_OK__"), "AI command leaked into the selected tab")
+    }
+
+    func testRemoteKindUsesItsExistingPTYForAICommandAndReturnsExitCode() async throws {
+        let (preferences, suiteName) = makePreferences()
+        defer { UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName) }
+        let session = TerminalSession(
+            title: "Mock SSH",
+            kind: .ssh(serverID: UUID(), endpoint: "root@example.test"),
+            preferences: preferences
+        ) { _ in
+            TerminalProcessConfiguration(
+                executable: "/bin/zsh",
+                arguments: ["-f"],
+                environment: nil,
+                execName: "ssh-test-transport",
+                currentDirectory: "/tmp",
+                resource: nil
+            )
+        }
+        session.startIfNeeded()
+        defer { session.terminate() }
+        try await Task.sleep(for: .milliseconds(150))
+        let completed = expectation(description: "PTY exit marker")
+        var receivedExitCode: Int?
+
+        try session.run(command: "printf '__REMOTE_PTY_ROUTE_OK__\\n'; false") { result in
+            receivedExitCode = try? result.get()
+            completed.fulfill()
+        }
+        await fulfillment(of: [completed], timeout: 3)
+
+        let buffer = String(decoding: session.terminalView.getTerminal().getBufferAsData(), as: UTF8.self)
+        XCTAssertTrue(buffer.contains("__REMOTE_PTY_ROUTE_OK__"))
+        XCTAssertEqual(receivedExitCode, 1)
+        XCTAssertTrue(session.kind.isRemote)
     }
 
     private func makePreferences() -> (TerminalPreferences, String) {

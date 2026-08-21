@@ -17,7 +17,7 @@ struct inchspaceApp: App {
     var body: some Scene {
         WindowGroup(id: "main") {
             ContentView(updateManager: updateManager)
-                .frame(minWidth: 118, minHeight: 80)
+                .frame(minWidth: 900, minHeight: 560)
                 .environmentObject(visibilityController)
                 .background(MainWindowBridge(controller: visibilityController))
                 .background(WindowOpeningBridge(controller: visibilityController))

@@ -45,11 +45,8 @@ struct RemoteFileView: View {
     private var selectedServer: Server? { serverManager.servers.first { $0.id == model.selectedServerID } }
 
     private var toolbar: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("远程文件").font(.system(size: 25, weight: .bold, design: .rounded))
-                Text("本机与 SFTP 双栏文件管理").font(.caption).foregroundStyle(.secondary)
-            }
+        HStack(spacing: AppLayout.featureHeaderSpacing) {
+            AppFeatureTitle("远程文件", subtitle: "本机与 SFTP 双栏文件管理")
             Spacer()
             HStack(spacing: 7) {
                 Circle().fill(model.connectionState == .connected ? Color.green : (model.connectionState == .connecting ? .orange : .secondary)).frame(width: 7, height: 7)
@@ -69,10 +66,10 @@ struct RemoteFileView: View {
                 Toggle("显示隐藏文件", isOn: $model.showsHiddenFiles)
                 Toggle("显示传输队列", isOn: $model.showsTransfers)
             } label: { Image(systemName: "ellipsis") }.menuStyle(.button).buttonStyle(.glass)
+                .help("文件视图选项")
+                .accessibilityLabel("文件视图选项")
         }
-        .padding(.horizontal, 22).frame(height: 68)
-        .background(.ultraThinMaterial.opacity(0.58))
-        .overlay(alignment: .bottom) { Divider().opacity(0.55) }
+        .appFeatureHeaderBackground(opacity: 0.58)
     }
 
     private func filePanel(title: String, symbol: String, path: String, pathInput: Binding<String>, editsPath: Binding<Bool>, items: [FileItem], selection: Binding<Set<String>>, isLocal: Bool) -> some View {

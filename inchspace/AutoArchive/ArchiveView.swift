@@ -104,20 +104,23 @@ private struct ArchiveOnboardingView: View {
 
     private var privacy: some View {
         VStack(spacing: 22) {
-            CardHeader(symbol: "lock.shield", title: "整理时会用到 AI",
-                       subtitle: "只发送文件名和少量关键词，不发送文件正文。每次整理都可以一键撤销。")
+            CardHeader(symbol: "lock.shield", title: "要用 AI 来整理吗？",
+                       subtitle: "AI 只会收到文件名和少量关键词，不会收到文件正文。不用 AI 时，会在本机按文件类型整理。")
             if let folder = model.workspace {
                 Label(folder.url.lastPathComponent, systemImage: "folder")
                     .font(.callout).foregroundStyle(.secondary).lineLimit(1)
             }
-            if model.isModelConfigured {
-                Button { model.finishOnboarding() } label: { Text("同意并开始").frame(maxWidth: .infinity) }
-                    .buttonStyle(.glassProminent).controlSize(.large)
-            } else {
-                VStack(spacing: 10) {
-                    Text("需要先配置一个 AI 模型。").font(.callout).foregroundStyle(.orange)
-                    Button { model.openModelSettings() } label: { Text("打开模型设置").frame(maxWidth: .infinity) }
+            VStack(spacing: 10) {
+                if model.isModelConfigured {
+                    Button { model.finishOnboarding(useAI: true) } label: { Text("同意并使用 AI").frame(maxWidth: .infinity) }
                         .buttonStyle(.glassProminent).controlSize(.large)
+                    Button { model.finishOnboarding(useAI: false) } label: { Text("仅在本机整理").frame(maxWidth: .infinity) }
+                        .buttonStyle(.glass).controlSize(.large)
+                } else {
+                    Button { model.finishOnboarding(useAI: false) } label: { Text("在本机整理").frame(maxWidth: .infinity) }
+                        .buttonStyle(.glassProminent).controlSize(.large)
+                    Button { model.openModelSettings() } label: { Text("先配置 AI 模型").frame(maxWidth: .infinity) }
+                        .buttonStyle(.glass).controlSize(.large)
                 }
             }
         }
@@ -177,7 +180,8 @@ private struct ArchiveDashboardView: View {
 
     private var folderLine: String {
         let name = model.workspace?.url.lastPathComponent ?? ""
-        return model.isWatching ? "\(name) · 自动整理中" : "\(name) · 已暂停"
+        let how = model.usesAI ? "AI 整理" : "本机整理"
+        return model.isWatching ? "\(name) · \(how)中" : "\(name) · 已暂停"
     }
 
     private var actions: some View {
@@ -247,13 +251,16 @@ private struct ArchiveDetailsSheet: View {
                 }
                 .disabled(model.isRunning)
                 Spacer()
+                Button(model.usesAI ? "改用本机整理" : "使用 AI 整理", systemImage: model.usesAI ? "desktopcomputer" : "sparkles") {
+                    model.setAI(!model.usesAI)
+                }
                 Button("模型设置", systemImage: "cpu") { dismiss(); model.openModelSettings() }
             }
             .buttonStyle(.glass)
             .labelStyle(.titleAndIcon)
             .padding(16)
         }
-        .frame(width: 560, height: 520)
+        .frame(width: 680, height: 520)
         .background(.ultraThinMaterial)
     }
 

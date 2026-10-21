@@ -22,6 +22,7 @@ final class ArchiveViewModel: ObservableObject {
 
     private enum Keys {
         static let consent = "archive.autopilot.aiConsent"
+        static let onboarded = "archive.autopilot.onboarded"
         static let watching = "archive.autopilot.watching"
     }
 
@@ -46,11 +47,14 @@ final class ArchiveViewModel: ObservableObject {
 
     var workspace: ArchiveFolder? { state.configuration.folders.first { $0.role == .workspace } }
     var hasConsent: Bool { defaults.bool(forKey: Keys.consent) }
+    var isOnboarded: Bool { defaults.bool(forKey: Keys.onboarded) || hasConsent }
+    /// AI is used only with consent and a working model; otherwise the offline planner takes over.
+    var usesAI: Bool { hasConsent && isModelConfigured }
     var isRunning: Bool { runTask != nil }
 
     var screen: ArchiveScreen {
         guard isReady else { return .loading }
-        return workspace != nil && hasConsent ? .dashboard : .onboarding
+        return workspace != nil && isOnboarded ? .dashboard : .onboarding
     }
 
     /// Completed batches that still have something to undo, newest first.
@@ -124,13 +128,20 @@ final class ArchiveViewModel: ObservableObject {
         } catch { activity = .failed(error.localizedDescription) }
     }
 
-    /// Records the one-time data-sharing consent and starts working.
-    func finishOnboarding() {
-        defaults.set(true, forKey: Keys.consent)
+    /// Finishes the guide. With consent the model plans the folder; without it the offline planner does.
+    func finishOnboarding(useAI: Bool) {
+        defaults.set(true, forKey: Keys.onboarded)
+        defaults.set(useAI, forKey: Keys.consent)
         defaults.set(true, forKey: Keys.watching)
         objectWillChange.send()
         startWatching()
         organize()
+    }
+
+    func setAI(_ enabled: Bool) {
+        if enabled, !isModelConfigured { openModelSettings(); return }
+        defaults.set(enabled, forKey: Keys.consent)
+        objectWillChange.send()
     }
 
     // MARK: Running
@@ -140,22 +151,19 @@ final class ArchiveViewModel: ObservableObject {
             rerunRequested = runTask != nil
             return
         }
-        guard let settings else { return }
-        let configuration: TerminalAIConfiguration
-        let key: String
-        do {
-            configuration = try settings.configuration.validated()
-            key = try settings.apiKey(for: configuration.baseURL)
-        } catch {
-            activity = .failed("还没有可用的 AI 模型，请先在模型设置中配置。")
-            return
-        }
-        activity = .working("正在查看文件…")
-        runTask = Task { [weak self] in
-            let autopilot = ArchiveAutopilot(service: service) { context in
+        let planner: ArchiveAutopilot.Planner
+        if usesAI, let settings, let configuration = try? settings.configuration.validated(),
+           let key = try? settings.apiKey(for: configuration.baseURL) {
+            planner = { context in
                 try await ArchiveAIClient().plan(context: context, preference: ArchiveAIPrompt.defaultPreference,
                                                  configuration: configuration, apiKey: key)
             }
+        } else {
+            planner = { ArchiveLocalPlanner.plan($0) }
+        }
+        activity = .working("正在查看文件…")
+        runTask = Task { [weak self] in
+            let autopilot = ArchiveAutopilot(service: service, planner: planner)
             var failure: String?
             var summary: ArchiveRunSummary?
             do {

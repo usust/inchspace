@@ -75,13 +75,47 @@ final class ArchiveAutopilotTests: XCTestCase {
         }
         let summary = try await autopilot.run()
         let batch = try XCTUnwrap(summary.batchIDs.first)
-        let plan = try XCTUnwrap(await service.snapshot().ai?.plans.first { $0.id == batch })
+        let snapshot = await service.snapshot()
+        let plan = try XCTUnwrap(snapshot.ai?.plans.first { $0.id == batch })
         let moved = try XCTUnwrap(plan.files.first)
         try await service.undo(moved.id)
         try await service.markSettled([moved.source.path: moved.fingerprint], removing: [moved.destination.path])
         _ = try await autopilot.run()
         XCTAssertEqual(calls, 1, "A file the user restored must not be organized again.")
         XCTAssertTrue(ArchiveFileSystem.exists(source))
+    }
+
+    func testLocalPlannerSortsByExistingFolderThenFileType() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        try FileManager.default.createDirectory(at: f.workspace.appendingPathComponent("Taxes"), withIntermediateDirectories: true)
+        let tax = try f.file("taxes-2025.pdf")
+        let photo = try f.file("holiday.jpg")
+        let unknown = try f.file("mystery.xyz")
+        let nested = f.workspace.appendingPathComponent("Taxes/old.pdf")
+        try Data("x".utf8).write(to: nested)
+        let service = try await f.service()
+        let autopilot = f.autopilot(service) { ArchiveLocalPlanner.plan($0) }
+        let summary = try await autopilot.run()
+        XCTAssertEqual(summary.movedFiles, 2)
+        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("Taxes/taxes-2025.pdf")))
+        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("图片/holiday.jpg")))
+        XCTAssertFalse(ArchiveFileSystem.exists(tax))
+        XCTAssertFalse(ArchiveFileSystem.exists(photo))
+        XCTAssertTrue(ArchiveFileSystem.exists(unknown), "Unknown types stay put.")
+        XCTAssertTrue(ArchiveFileSystem.exists(nested), "Files already in a subfolder are not reshuffled.")
+    }
+
+    func testLocalPlannerSkipsTakenDestinationNames() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        try FileManager.default.createDirectory(at: f.workspace.appendingPathComponent("图片"), withIntermediateDirectories: true)
+        try Data("old".utf8).write(to: f.workspace.appendingPathComponent("图片/a.jpg"))
+        let clash = try f.file("a.jpg")
+        let service = try await f.service()
+        let summary = try await f.autopilot(service) { ArchiveLocalPlanner.plan($0) }.run()
+        XCTAssertEqual(summary.movedFiles, 0)
+        XCTAssertTrue(ArchiveFileSystem.exists(clash))
     }
 
     func testWorkspaceConfigurationValidates() throws {

@@ -3,6 +3,42 @@ import XCTest
 
 @MainActor
 final class ServerManagerTests: XCTestCase {
+    func testEmptyPasswordCanBeSavedUpdatedAndDuplicated() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("inchspace-empty-password-\(UUID().uuidString).json")
+        let manager = ServerManager(persistence: ServerPersistence(fileURL: fileURL))
+        let serverID = UUID()
+        let credential = SSHCredential(serverID: serverID, authentication: .password)
+        let server = Server(id: serverID, name: "Empty password", host: "localhost", user: "test", credentialID: credential.id)
+        defer {
+            for savedServer in manager.servers {
+                RunnerServerCredentialStore.deletePassword(for: savedServer.id)
+            }
+            try? FileManager.default.removeItem(at: fileURL)
+        }
+
+        manager.add(server, credential: credential, password: "")
+        XCTAssertNil(manager.presentedError)
+        XCTAssertEqual(try RunnerServerCredentialStore.password(for: server.id), "")
+
+        manager.update(server, credential: credential, password: "previous-password")
+        manager.update(server, credential: credential, password: nil)
+        XCTAssertEqual(try RunnerServerCredentialStore.password(for: server.id), "previous-password")
+
+        manager.update(server, credential: credential, password: "")
+        XCTAssertNil(manager.presentedError)
+        XCTAssertEqual(try RunnerServerCredentialStore.password(for: server.id), "")
+
+        manager.duplicate(server)
+        let duplicate = try XCTUnwrap(manager.servers.last)
+        XCTAssertNotEqual(duplicate.id, server.id)
+        XCTAssertEqual(try RunnerServerCredentialStore.password(for: duplicate.id), "")
+    }
+
+    func testMissingPasswordStillThrows() {
+        XCTAssertThrowsError(try RunnerServerCredentialStore.password(for: UUID()))
+    }
+
     func testServerLibraryRoundTrip() throws {
         let fileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("inchspace-servers-\(UUID().uuidString).json")

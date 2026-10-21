@@ -1,0 +1,520 @@
+import Darwin
+import Foundation
+import XCTest
+@testable import inchspace
+
+@MainActor
+final class ArchiveAIPlanningTests: XCTestCase {
+    func testLegacyStateDecodesWithDirectoryPowersDisabled() throws {
+        var old = ArchiveState()
+        old.configuration.folders = [ArchiveFolder(role: .library, url: URL(fileURLWithPath: "/LibraryExample"))]
+        let data = try JSONEncoder().encode(old)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object.removeValue(forKey: "ai")
+        var configuration = try XCTUnwrap(object["configuration"] as? [String: Any])
+        var folders = try XCTUnwrap(configuration["folders"] as? [[String: Any]])
+        folders[0].removeValue(forKey: "directoryPermission")
+        configuration["folders"] = folders
+        object["configuration"] = configuration
+        let loaded = try JSONDecoder().decode(ArchiveState.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertNil(loaded.ai)
+        XCTAssertNil(loaded.configuration.folders[0].directoryPermission)
+    }
+
+    func testCreateMoveRemoveAndUndoPreserveFileData() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let source = try f.file("invoice-2026.txt")
+        let empty = try f.directory("Obsolete", root: f.library)
+        let service = try await f.service()
+        let context = try await f.context(service)
+        let file = try XCTUnwrap(context.files.first)
+        let response = f.response(file: file, creates: ["Finance", "Finance/Invoices"], removes: ["Obsolete"])
+        let before = try Data(contentsOf: source)
+        let preview = try await service.previewAI(response, contextID: context.id)
+        XCTAssertFalse(ArchiveFileSystem.exists(f.library.appendingPathComponent("Finance")))
+        XCTAssertTrue(ArchiveFileSystem.exists(empty))
+        XCTAssertTrue(ArchiveFileSystem.exists(source))
+        let untouched = await service.snapshot()
+        XCTAssertNil(untouched.ai)
+        XCTAssertTrue(untouched.operations.isEmpty)
+        let completed = try await service.applyAI(preview.id)
+        XCTAssertEqual(completed.status, .complete, completed.error ?? "")
+        XCTAssertTrue(completed.directories.allSatisfy { $0.status == .complete })
+        XCTAssertFalse(ArchiveFileSystem.exists(source))
+        XCTAssertFalse(ArchiveFileSystem.exists(empty))
+        let moved = try XCTUnwrap(completed.files.first)
+        XCTAssertEqual(try Data(contentsOf: moved.destination), before)
+        let saved = await service.snapshot()
+        XCTAssertEqual(saved.operations.first?.status, .complete)
+        XCTAssertEqual(saved.ai?.plans.first?.status, .complete)
+        // Empty-only undo must refuse while the newly created category still holds a file.
+        let child = try XCTUnwrap(completed.directories.first { $0.target.lastPathComponent == "Invoices" })
+        await rejected { try await service.undoAIDirectory(planID: completed.id, operationID: child.id) }
+        XCTAssertEqual(try Data(contentsOf: moved.destination), before)
+        try await service.undo(moved.id)
+        XCTAssertEqual(try Data(contentsOf: source), before)
+        try await service.undoAIDirectory(planID: completed.id, operationID: child.id)
+        let parent = try XCTUnwrap(completed.directories.first { $0.target.lastPathComponent == "Finance" })
+        try await service.undoAIDirectory(planID: completed.id, operationID: parent.id)
+        let deleted = try XCTUnwrap(completed.directories.first { $0.action == .removeEmpty })
+        try await service.undoAIDirectory(planID: completed.id, operationID: deleted.id)
+        XCTAssertTrue(try ArchiveDirectoryFileSystem.isEmpty(empty))
+        let undone = await service.snapshot()
+        XCTAssertEqual(undone.operations.first?.status, .undone, "Directory undo must not overwrite the latest file journal state.")
+        XCTAssertTrue(undone.ai?.plans.first?.directories.allSatisfy { $0.status == .undone } == true)
+    }
+
+    func testPermissionOffRejectsCreateAndRemove() async throws {
+        let f = try Fixture(create: false, remove: false)
+        defer { f.remove() }
+        _ = try f.file()
+        _ = try f.directory("Obsolete", root: f.library)
+        let service = try await f.service()
+        let context = try await f.context(service)
+        let file = try XCTUnwrap(context.files.first)
+        await rejected { _ = try await service.previewAI(f.response(file: file), contextID: context.id) }
+        let remove = ArchiveAIResponse(summary: "清理", directories: [f.directoryRequest(.removeEmpty, "Obsolete")], files: [])
+        await rejected { _ = try await service.previewAI(remove, contextID: context.id) }
+        XCTAssertFalse(ArchiveFileSystem.exists(f.library.appendingPathComponent("Finance")))
+        XCTAssertTrue(ArchiveFileSystem.exists(f.library.appendingPathComponent("Obsolete")))
+    }
+
+    func testRevokingPermissionInvalidatesDisplayedPlanBeforeAnyMutation() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let source = try f.file()
+        let service = try await f.service()
+        let context = try await f.context(service)
+        let plan = try await service.previewAI(f.response(file: XCTUnwrap(context.files.first)), contextID: context.id)
+        try await service.setDirectoryPermission(folderID: f.libraryFolder.id, permission: ArchiveDirectoryPermission())
+        await rejected { _ = try await service.applyAI(plan.id) }
+        XCTAssertTrue(ArchiveFileSystem.exists(source))
+        XCTAssertFalse(ArchiveFileSystem.exists(f.library.appendingPathComponent("Finance")))
+        let state = await service.snapshot()
+        XCTAssertNil(state.ai)
+    }
+
+    func testTraversalUnknownRootAndRootDeletionAreRejected() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        _ = try f.file()
+        let service = try await f.service()
+        let context = try await f.context(service)
+        let file = try XCTUnwrap(context.files.first)
+        for path in ["../Outside", "/Outside", "A/../../Outside", "A//B", ".hidden", "A/./B", "Example.app", "~", ""] {
+            var response = f.response(file: file, creates: [path])
+            response.files[0].relativeDirectory = path
+            await rejected { _ = try await service.previewAI(response, contextID: context.id) }
+        }
+        var unknown = f.response(file: file)
+        unknown.directories[0].rootID = UUID().uuidString
+        await rejected { _ = try await service.previewAI(unknown, contextID: context.id) }
+        let rootDelete = ArchiveAIResponse(summary: "不能删除根", directories: [f.directoryRequest(.removeEmpty, "")], files: [])
+        await rejected { _ = try await service.previewAI(rootDelete, contextID: context.id) }
+        XCTAssertTrue(ArchiveFileSystem.exists(f.library))
+    }
+
+    func testExcludedAndSymlinkDestinationsAreRejected() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        _ = try f.file()
+        let excluded = try f.directory("Private", root: f.library)
+        let outside = try f.directory("Outside", root: f.root)
+        try FileManager.default.createSymbolicLink(at: f.library.appendingPathComponent("Link"), withDestinationURL: outside)
+        var config = f.config
+        config.folders.append(ArchiveFolder(role: .excluded, url: excluded))
+        let service = try ArchiveService(directory: f.state)
+        try await service.configure(config)
+        let context = try await f.context(service)
+        let file = try XCTUnwrap(context.files.first)
+        for path in ["Private/Finance", "Link/Finance"] {
+            await rejected { _ = try await service.previewAI(f.response(file: file, creates: [path]), contextID: context.id) }
+        }
+        XCTAssertTrue(try ArchiveDirectoryFileSystem.isEmpty(outside))
+        XCTAssertTrue(try ArchiveDirectoryFileSystem.isEmpty(excluded))
+    }
+
+    func testNonEmptyAndHiddenContentDirectoriesCannotBeRemoved() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let folder = try f.directory("Obsolete", root: f.library)
+        let hidden = folder.appendingPathComponent(".DS_Store")
+        try Data("hidden sentinel".utf8).write(to: hidden)
+        let service = try await f.service()
+        let context = try await f.context(service)
+        let response = ArchiveAIResponse(summary: "清理", directories: [f.directoryRequest(.removeEmpty, "Obsolete")], files: [])
+        await rejected { _ = try await service.previewAI(response, contextID: context.id) }
+        let identity = try ArchiveDirectoryFileSystem.identity(folder)
+        XCTAssertThrowsError(try ArchiveDirectoryFileSystem.removeEmpty(folder, expected: identity))
+        XCTAssertEqual(try String(contentsOf: hidden, encoding: .utf8), "hidden sentinel")
+    }
+
+    func testDirectoryBecomingNonEmptyAfterPreviewStopsWholePlan() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let source = try f.file()
+        let empty = try f.directory("Obsolete", root: f.library)
+        let service = try await f.service()
+        let context = try await f.context(service)
+        let plan = try await service.previewAI(f.response(file: XCTUnwrap(context.files.first), removes: ["Obsolete"]), contextID: context.id)
+        let newFile = empty.appendingPathComponent("new.txt")
+        try Data("new data".utf8).write(to: newFile)
+        await rejected { _ = try await service.applyAI(plan.id) }
+        XCTAssertEqual(try String(contentsOf: newFile, encoding: .utf8), "new data")
+        XCTAssertTrue(ArchiveFileSystem.exists(source))
+        XCTAssertFalse(ArchiveFileSystem.exists(f.library.appendingPathComponent("Finance")))
+    }
+
+    func testChangedSourceRejectsWholePlanBeforeCreatingDirectories() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let source = try f.file()
+        let service = try await f.service()
+        let context = try await f.context(service)
+        let plan = try await service.previewAI(f.response(file: XCTUnwrap(context.files.first)), contextID: context.id)
+        try Data("updated document".utf8).write(to: source)
+        await rejected { _ = try await service.applyAI(plan.id) }
+        XCTAssertFalse(ArchiveFileSystem.exists(f.library.appendingPathComponent("Finance")))
+        XCTAssertEqual(try String(contentsOf: source, encoding: .utf8), "updated document")
+    }
+
+    func testCaseCollisionAndUnusedCreatedDirectoriesAreRejected() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        _ = try f.file()
+        _ = try f.directory("FINANCE", root: f.library)
+        let service = try await f.service()
+        let context = try await f.context(service)
+        await rejected { _ = try await service.previewAI(f.response(file: XCTUnwrap(context.files.first)), contextID: context.id) }
+        let unused = ArchiveAIResponse(summary: "无文件依据", directories: [f.directoryRequest(.create, "Unused")], files: [])
+        await rejected { _ = try await service.previewAI(unused, contextID: context.id) }
+    }
+
+    func testDuplicateSourcesAndDestinationCollisionsAreRejected() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        _ = try f.file()
+        let secondRoot = try f.directory("Second", root: f.inbox)
+        try Data("second invoice".utf8).write(to: secondRoot.appendingPathComponent("invoice.txt"))
+        let service = try await f.service()
+        let context = try await f.context(service)
+        XCTAssertEqual(context.files.count, 2)
+        var duplicate = try f.response(file: XCTUnwrap(context.files.first))
+        duplicate.files.append(duplicate.files[0])
+        await rejected { _ = try await service.previewAI(duplicate, contextID: context.id) }
+        duplicate.files[1].fileID = context.files[1].id
+        await rejected { _ = try await service.previewAI(duplicate, contextID: context.id) }
+    }
+
+    func testExpiredAIContextAndRepeatedApplyAreRejected() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        _ = try f.file()
+        let service = try await f.service()
+        let old = try await f.context(service, now: Date().addingTimeInterval(-3_610))
+        await rejected { _ = try await service.previewAI(f.response(file: XCTUnwrap(old.files.first)), contextID: old.id) }
+        let current = try await f.context(service)
+        let preview = try await service.previewAI(f.response(file: XCTUnwrap(current.files.first)), contextID: current.id)
+        let result = try await service.applyAI(preview.id)
+        XCTAssertEqual(result.status, .complete)
+        await rejected { _ = try await service.applyAI(preview.id) }
+    }
+
+    func testPromptPayloadOmitsAbsolutePathsBookmarksAndFullText() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        _ = try f.file()
+        let service = try await f.service()
+        var context = try await f.context(service)
+        let secret = "secret bookmark material"
+        context.folders[0].bookmark = Data(secret.utf8)
+        let payload = try ArchiveAIPrompt.payload(context: context, preference: "按业务分类")
+        XCTAssertFalse(payload.contains(f.root.path))
+        XCTAssertFalse(payload.contains(secret))
+        XCTAssertFalse(payload.contains(Data(secret.utf8).base64EncodedString()))
+        XCTAssertFalse(payload.contains("sha256"))
+        XCTAssertTrue(payload.contains("invoice.txt"))
+        XCTAssertTrue(payload.contains("canRemoveEmpty"))
+        XCTAssertTrue(ArchiveAIPrompt.system.contains("不可信"))
+        XCTAssertTrue(ArchiveAIPrompt.system.contains("不能递归删除"))
+    }
+
+    func testRequestUsesConfiguredModelAndKeepsKeyOutOfPrompt() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        _ = try f.file()
+        let service = try await f.service()
+        let context = try await f.context(service)
+        let configuration = TerminalAIConfiguration(service: .custom, baseURL: "https://example.invalid/v1", model: "test-model")
+        let request = try ArchiveAIClient().request(context: context, preference: "主题分类", configuration: configuration, apiKey: "fixture-secret")
+        XCTAssertEqual(request.url?.absoluteString, "https://example.invalid/v1/chat/completions")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer fixture-secret")
+        XCTAssertEqual(request.timeoutInterval, 60)
+        let body = try XCTUnwrap(request.httpBody)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["model"] as? String, "test-model")
+        XCTAssertEqual(json["stream"] as? Bool, false)
+        XCTAssertEqual(json["max_tokens"] as? Int, 6_000)
+        let bodyString = String(decoding: body, as: UTF8.self)
+        XCTAssertFalse(bodyString.contains("fixture-secret"))
+        XCTAssertFalse(bodyString.contains(f.root.path))
+        let messages = try XCTUnwrap(json["messages"] as? [[String: String]])
+        XCTAssertEqual(messages.first?["role"], "system")
+        XCTAssertEqual(messages.first?["content"], ArchiveAIPrompt.system)
+        XCTAssertThrowsError(try ArchiveAIClient().request(context: context, preference: "", configuration:
+            TerminalAIConfiguration(service: .custom, baseURL: "http://example.invalid/v1", model: "test-model"), apiKey: ""))
+        let local = try ArchiveAIClient().request(context: context, preference: "", configuration:
+            TerminalAIConfiguration(service: .ollama, baseURL: "http://localhost:11434/v1", model: "local"), apiKey: "")
+        XCTAssertNil(local.value(forHTTPHeaderField: "Authorization"))
+    }
+
+    func testRecoveryBlocksNewPlansUsingUncertainDirectories() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let source = try f.file()
+        let uncertain = try f.directory("Uncertain", root: f.library)
+        var saved = ArchiveState()
+        saved.configuration = f.config
+        saved.ai = ArchiveAIState(plans: [ArchiveAIPlan(contextID: UUID(), version: 0, summary: "Interrupted", directories: [
+            ArchiveDirectoryOperation(action: .create, rootID: f.libraryFolder.id.uuidString, target: uncertain, reason: "fixture"),
+        ], files: [])])
+        do { let persistence = try ArchivePersistence(directory: f.state); try persistence.save(saved) }
+        let service = try ArchiveService(directory: f.state)
+        try await service.recoverAIDirectories()
+        let context = try await f.context(service)
+        let file = try XCTUnwrap(context.files.first)
+        let response = ArchiveAIResponse(summary: "不能复用未核对目录", directories: [], files: [
+            ArchiveAIFileRequest(fileID: file.id, rootID: f.libraryFolder.id.uuidString, relativeDirectory: "Uncertain", reason: "fixture"),
+        ])
+        await rejected { _ = try await service.previewAI(response, contextID: context.id) }
+        XCTAssertTrue(ArchiveFileSystem.exists(source))
+        XCTAssertTrue(try ArchiveDirectoryFileSystem.isEmpty(uncertain))
+    }
+
+    func testStrictResponseDecoderRejectsCommandsAndExtraFields() throws {
+        let valid = """
+        {"summary":"无需改动","directories":[],"files":[]}
+        """
+        XCTAssertTrue(try ArchiveAIPrompt.decode(valid).files.isEmpty)
+        for invalid in [
+            "{\"summary\":\"x\",\"directories\":[],\"files\":[],\"command\":\"rm -rf\"}",
+            "{\"summary\":\"x\",\"directories\":[{\"action\":\"removeAll\",\"rootID\":\"x\",\"relativePath\":\"x\",\"reason\":\"x\"}],\"files\":[]}",
+            "```json\n\(valid)\n```",
+            "{\"summary\":true,\"directories\":[],\"files\":[]}",
+        ] { XCTAssertThrowsError(try ArchiveAIPrompt.decode(invalid)) }
+    }
+
+    func testRecoveryPreservesUncertainDirectoriesWithoutReplay() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let directory = try f.directory("Existing", root: f.library)
+        var saved = ArchiveState()
+        saved.configuration = f.config
+        saved.ai = ArchiveAIState(plans: [ArchiveAIPlan(contextID: UUID(), version: 0, summary: "Interrupted", directories: [
+            ArchiveDirectoryOperation(action: .create, rootID: f.libraryFolder.id.uuidString, target: directory, reason: "fixture"),
+        ], files: [])])
+        do {
+            let persistence = try ArchivePersistence(directory: f.state)
+            try persistence.save(saved)
+        }
+        let service = try ArchiveService(directory: f.state)
+        try await service.recoverAIDirectories()
+        let recovered = await service.snapshot()
+        XCTAssertEqual(recovered.ai?.plans.first?.status, .needsReview)
+        XCTAssertEqual(recovered.ai?.plans.first?.directories.first?.status, .needsReview)
+        XCTAssertTrue(ArchiveFileSystem.exists(directory))
+        try await service.recoverAIDirectories()
+        XCTAssertTrue(ArchiveFileSystem.exists(directory))
+    }
+
+    func testDirectoryUndoRequiresCurrentInversePermission() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        _ = try f.directory("Obsolete", root: f.library)
+        let service = try await f.service()
+        let context = try await f.context(service)
+        let preview = try await service.previewAI(ArchiveAIResponse(summary: "删除空目录", directories: [f.directoryRequest(.removeEmpty, "Obsolete")], files: []), contextID: context.id)
+        let complete = try await service.applyAI(preview.id)
+        XCTAssertEqual(complete.status, .complete)
+        try await service.setDirectoryPermission(folderID: f.libraryFolder.id, permission: ArchiveDirectoryPermission(canCreate: false, canRemoveEmpty: true))
+        await rejected { try await service.undoAIDirectory(planID: complete.id, operationID: XCTUnwrap(complete.directories.first).id) }
+        XCTAssertFalse(ArchiveFileSystem.exists(f.library.appendingPathComponent("Obsolete")))
+    }
+
+    func testLibraryReorganizationRenameAndUndo() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let oldFolder = try f.directory("OldClassification", root: f.library)
+        let source = oldFolder.appendingPathComponent("invoice-2026.txt")
+        let contents = Data("invoice accounting payable".utf8)
+        try contents.write(to: source)
+        let service = try await f.service()
+        let excluded = try await f.context(service)
+        XCTAssertTrue(excluded.files.isEmpty, "Library file inclusion must be explicit.")
+        _ = try await service.prepareAIContext(now: Date().addingTimeInterval(-3), includeLibraryFiles: true)
+        let context = try await service.prepareAIContext(includeLibraryFiles: true)
+        let file = try XCTUnwrap(context.files.first)
+        XCTAssertEqual(file.source, source)
+        var response = f.response(file: file, creates: ["Business", "Business/Invoices"])
+        response.files[0].proposedName = "发票_invoice-2026.txt"
+        let plan = try await service.previewAI(response, contextID: context.id)
+        XCTAssertTrue(ArchiveFileSystem.exists(source))
+        XCTAssertEqual(plan.files.first?.sourceRole, .library)
+        XCTAssertTrue(plan.targetTree(folders: f.config.folders).contains("Business/"))
+        XCTAssertTrue(plan.targetTree(folders: f.config.folders).contains("发票_invoice-2026.txt"))
+        let applied = try await service.applyAI(plan.id)
+        XCTAssertEqual(applied.status, .complete, applied.error ?? "")
+        let operation = try XCTUnwrap(applied.files.first)
+        XCTAssertFalse(ArchiveFileSystem.exists(source))
+        XCTAssertEqual(try Data(contentsOf: operation.destination), contents)
+        try await service.undo(operation.id)
+        XCTAssertEqual(try Data(contentsOf: source), contents)
+        XCTAssertFalse(ArchiveFileSystem.exists(operation.destination))
+    }
+
+    func testLibraryRenameInPlaceWithoutDirectoryPermissions() async throws {
+        let f = try Fixture(create: false, remove: false)
+        defer { f.remove() }
+        let source = f.library.appendingPathComponent("draft INV-0042 v2.1.txt")
+        try Data("invoice document".utf8).write(to: source)
+        let service = try await f.service()
+        _ = try await service.prepareAIContext(now: Date().addingTimeInterval(-3), includeLibraryFiles: true)
+        let context = try await service.prepareAIContext(includeLibraryFiles: true)
+        let file = try XCTUnwrap(context.files.first)
+        let response = ArchiveAIResponse(summary: "同目录命名优化", directories: [], files: [
+            ArchiveAIFileRequest(fileID: file.id, rootID: f.libraryFolder.id.uuidString, relativeDirectory: "",
+                                 reason: "清晰描述票据，保留编号与版本", proposedName: "发票_INV-0042_v2.1.txt")
+        ])
+        let preview = try await service.previewAI(response, contextID: context.id)
+        let completed = try await service.applyAI(preview.id)
+        XCTAssertEqual(completed.status, .complete, completed.error ?? "")
+        let operation = try XCTUnwrap(completed.files.first)
+        XCTAssertEqual(operation.destination.deletingLastPathComponent(), f.library)
+        try await service.undo(operation.id)
+        XCTAssertTrue(ArchiveFileSystem.exists(source))
+    }
+
+    func testAIRenameValidationPreservesFormatAndIdentifiers() throws {
+        let source = URL(fileURLWithPath: "/example/2026-10-19 INV-0042 v2.1.PDF")
+        XCTAssertEqual(try ArchiveAINamePolicy.validate("合同_2026-10-19_INV-0042_v2.1.PDF", original: source), "合同_2026-10-19_INV-0042_v2.1.PDF")
+        for name in ["../合同.PDF", "/合同.PDF", "合同\\副本.PDF", "合同:副本.PDF", ".合同.PDF",
+                     "合同_2026-10-19_INV-0042_v2.1.pdf", "合同_2026-10-19_INV-0042_v2.1.txt",
+                     "合同_2026-10-19_INV-0042.PDF", "合同_2026-10-19_INV-00420_v2.1.PDF",
+                     "合同_2026-10-19_INV-0042_v2.1.PDF ", String(repeating: "界", count: 100) + ".PDF"] {
+            XCTAssertThrowsError(try ArchiveAINamePolicy.validate(name, original: source), name)
+        }
+    }
+
+    func testInvalidAIRenameIsRejectedBeforeCreatingDirectories() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let source = try f.file("invoice-2026.txt")
+        let service = try await f.service()
+        let context = try await f.context(service)
+        var response = try f.response(file: XCTUnwrap(context.files.first))
+        for name in ["../outside.txt", "发票.txt", "invoice-2026.pdf"] {
+            response.files[0].proposedName = name
+            await rejected { _ = try await service.previewAI(response, contextID: context.id) }
+        }
+        XCTAssertTrue(ArchiveFileSystem.exists(source))
+        XCTAssertFalse(ArchiveFileSystem.exists(f.library.appendingPathComponent("Finance")))
+    }
+
+    func testAIRenamedTargetCollisionIsRejected() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        _ = try f.file()
+        let destination = f.library.appendingPathComponent("REPORT.txt")
+        try Data("existing sentinel".utf8).write(to: destination)
+        let service = try await f.service()
+        let context = try await f.context(service)
+        let file = try XCTUnwrap(context.files.first)
+        let response = ArchiveAIResponse(summary: "rename", directories: [], files: [
+            ArchiveAIFileRequest(fileID: file.id, rootID: f.libraryFolder.id.uuidString, relativeDirectory: "",
+                                 reason: "report", proposedName: "report.txt")
+        ])
+        await rejected { _ = try await service.previewAI(response, contextID: context.id) }
+        XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), "existing sentinel")
+    }
+
+    func testResponseRequiresExplicitProposedName() throws {
+        let valid = """
+        {"summary":"重构","directories":[],"files":[{"fileID":"f","rootID":"r","relativeDirectory":"","proposedName":"发票.txt","reason":"主题明确"}]}
+        """
+        XCTAssertEqual(try ArchiveAIPrompt.decode(valid).files.first?.proposedName, "发票.txt")
+        let oldShape = valid.replacingOccurrences(of: "\"proposedName\":\"发票.txt\",", with: "")
+        XCTAssertThrowsError(try ArchiveAIPrompt.decode(oldShape))
+        XCTAssertThrowsError(try ArchiveAIPrompt.decode(valid.replacingOccurrences(of: "\"发票.txt\"", with: "null")))
+    }
+
+    func testLegacyOperationsStillDecodeWithInboxSource() throws {
+        let fingerprint = ArchiveFingerprint(device: 1, inode: 1, size: 1, modifiedSeconds: 0, modifiedNanoseconds: 0, sha256: "fixture")
+        let operation = ArchiveOperation(suggestionID: UUID(), source: URL(fileURLWithPath: "/Inbox/a.txt"),
+                                         destination: URL(fileURLWithPath: "/Library/a.txt"), fingerprint: fingerprint,
+                                         staging: URL(fileURLWithPath: "/Inbox/.stage"), undoStaging: URL(fileURLWithPath: "/Library/.stage"))
+        let data = try JSONEncoder().encode(operation)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object.removeValue(forKey: "sourceRole")
+        let loaded = try JSONDecoder().decode(ArchiveOperation.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertNil(loaded.sourceRole)
+        XCTAssertEqual(loaded.source, operation.source)
+    }
+
+    private func rejected(file: StaticString = #filePath, line: UInt = #line, _ action: () async throws -> Void) async {
+        do { try await action(); XCTFail("Expected rejection", file: file, line: line) }
+        catch { XCTAssertTrue(error is ArchiveError, "\(error)", file: file, line: line) }
+    }
+
+    private struct Fixture {
+        let root: URL
+        let inbox: URL
+        let library: URL
+        let state: URL
+        let inboxFolder: ArchiveFolder
+        let libraryFolder: ArchiveFolder
+        var config: ArchiveConfiguration { ArchiveConfiguration(folders: [inboxFolder, libraryFolder]) }
+
+        init(create: Bool = true, remove: Bool = true) throws {
+            let temporary = ProcessInfo.processInfo.environment["TMPDIR"] ?? FileManager.default.temporaryDirectory.path
+            guard let physical = realpath(temporary, nil) else { throw ArchiveError("No temp path") }
+            root = URL(fileURLWithPath: String(cString: physical), isDirectory: true).appendingPathComponent("archive-ai-tests-\(UUID().uuidString)", isDirectory: true)
+            free(physical)
+            inbox = root.appendingPathComponent("Inbox", isDirectory: true)
+            library = root.appendingPathComponent("Library", isDirectory: true)
+            state = root.appendingPathComponent("State", isDirectory: true)
+            inboxFolder = ArchiveFolder(role: .inbox, url: inbox)
+            libraryFolder = ArchiveFolder(role: .library, url: library, directoryPermission: ArchiveDirectoryPermission(canCreate: create, canRemoveEmpty: remove))
+            for url in [inbox, library, state] { try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true) }
+        }
+        func file(_ name: String = "invoice.txt") throws -> URL {
+            let url = inbox.appendingPathComponent(name)
+            try Data("invoice accounting payable".utf8).write(to: url)
+            return url
+        }
+        func directory(_ name: String, root: URL) throws -> URL {
+            let url = root.appendingPathComponent(name, isDirectory: true)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            return url
+        }
+        func service() async throws -> ArchiveService {
+            let service = try ArchiveService(directory: state)
+            try await service.configure(config)
+            return service
+        }
+        func context(_ service: ArchiveService, now: Date = Date()) async throws -> ArchiveAIContext {
+            _ = try await service.prepareAIContext(now: now.addingTimeInterval(-3))
+            return try await service.prepareAIContext(now: now)
+        }
+        func directoryRequest(_ action: ArchiveDirectoryActionKind, _ path: String) -> ArchiveAIDirectoryRequest {
+            ArchiveAIDirectoryRequest(action: action, rootID: libraryFolder.id.uuidString, relativePath: path, reason: "分类规划")
+        }
+        func response(file: ArchiveAIFile, creates: [String] = ["Finance"], removes: [String] = []) -> ArchiveAIResponse {
+            ArchiveAIResponse(summary: "发票归档并清理旧空分类",
+                              directories: creates.map { directoryRequest(.create, $0) } + removes.map { directoryRequest(.removeEmpty, $0) },
+                              files: [ArchiveAIFileRequest(fileID: file.id, rootID: libraryFolder.id.uuidString,
+                                                           relativeDirectory: creates.last ?? "", reason: "包含发票关键词")])
+        }
+        func remove() { try? FileManager.default.removeItem(at: root) }
+    }
+}

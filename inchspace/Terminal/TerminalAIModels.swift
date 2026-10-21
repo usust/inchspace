@@ -99,8 +99,8 @@ enum TerminalAIError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .notConfigured: "AI 尚未配置，请先在设置中填写 API Key 和模型。"
-        case .invalidResponse: "DeepSeek 返回了无法识别的响应。"
+        case .notConfigured: "AI 尚未配置，请先在设置中配置服务地址、模型和所需的 API Key，并应用配置。"
+        case .invalidResponse: "模型服务返回了无法识别的响应，请确认接口支持 OpenAI 兼容的模型列表与流式聊天。"
         case .provider(let message): message
         case .sessionUnavailable: "原终端会话已关闭，命令不会发送到其他会话。"
         }

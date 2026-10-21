@@ -10,16 +10,18 @@ import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @EnvironmentObject private var visibilityController: AppVisibilityController
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var syncManager: ICloudSyncManager
     @ObservedObject var updateManager: UpdateManager
     @ObservedObject var terminalManager: TerminalManager
+    @Binding var selectedCategory: SettingsTab
     let onSyncConfigurationChanged: () -> Void
     @State private var isChoosingFolder = false
     @State private var isConfirmingFolderRemoval = false
     @State private var configurationError: String?
 
-    var body: some View {
-        Form {
+    private var generalSettings: some View {
+        Group {
             Section("窗口与驻留") {
                 Toggle(isOn: Binding(
                     get: { visibilityController.preferences.hidesAfterOpen },
@@ -91,105 +93,198 @@ struct SettingsView: View {
                         .foregroundStyle(.orange)
                 }
             }
+        }
+    }
 
-            TerminalSettingsSection(manager: terminalManager)
-
-            TerminalAISettingsSection(settings: terminalManager.aiSettings)
-
-            Section("iCloud 与数据") {
-                LabeledContent {
-                    VStack(alignment: .trailing, spacing: 4) {
-                        HStack(spacing: 6) {
-                            if syncManager.status == .syncing {
-                                ProgressView()
-                                    .controlSize(.small)
-                            } else {
-                                Image(systemName: statusSymbol)
-                            }
-                            Text(statusTitle)
+    private var syncSettings: some View {
+        Section("iCloud 与数据") {
+            LabeledContent {
+                VStack(alignment: .trailing, spacing: 4) {
+                    HStack(spacing: 6) {
+                        if syncManager.status == .syncing {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: statusSymbol)
                         }
-                        .foregroundStyle(statusColor)
-                        if let date = syncManager.lastSuccessfulSync {
-                            Text("最后同步：\(date.formatted(date: .abbreviated, time: .shortened))")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                        Text(statusTitle)
                     }
-                } label: {
-                    Label {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("iCloud Drive")
-                                .fontWeight(.medium)
-                            Text("将程序、目录、网站、工作台布局及通用应用偏好同步到您选择的 iCloud Drive 文件夹。")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    } icon: {
-                        Image(systemName: "icloud")
-                            .foregroundStyle(.tint)
+                    .foregroundStyle(statusColor)
+                    if let date = syncManager.lastSuccessfulSync {
+                        Text("最后同步：\(date.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
+            } label: {
+                SettingsPreferenceLabel(
+                    title: "iCloud Drive",
+                    description: "同步程序、目录、网站、工作台布局及通用应用偏好到所选文件夹",
+                    systemImage: "icloud"
+                )
+            }
 
-                Toggle("使用 iCloud 同步", isOn: Binding(
-                    get: { syncManager.isEnabled },
-                    set: { enabled in
-                        syncManager.setEnabled(enabled)
-                        if enabled { onSyncConfigurationChanged() }
-                    }
-                ))
-                .disabled(!syncManager.isConfigured)
+            Toggle("使用 iCloud 同步", isOn: Binding(
+                get: { syncManager.isEnabled },
+                set: { enabled in
+                    syncManager.setEnabled(enabled)
+                    if enabled { onSyncConfigurationChanged() }
+                }
+            ))
+            .disabled(!syncManager.isConfigured)
 
-                LabeledContent("同步文件夹") {
-                    if let folderName = syncManager.selectedFolderName {
-                        HStack(spacing: 8) {
-                            Text(folderName)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                            Menu {
-                                Button("更改同步文件夹…") {
-                                    isChoosingFolder = true
-                                }
-                                Button("在 Finder 中显示") {
-                                    revealFolderInFinder()
-                                }
-                                Divider()
-                                Button("停止使用此文件夹…", role: .destructive) {
-                                    isConfirmingFolderRemoval = true
-                                }
-                            } label: {
-                                Image(systemName: "ellipsis.circle")
-                            }
-                            .menuStyle(.borderlessButton)
-                            .help("管理同步文件夹")
-                            .accessibilityLabel("管理同步文件夹")
-                        }
-                    } else {
-                        HStack(spacing: 8) {
-                            Text("未选择")
-                                .foregroundStyle(.secondary)
-                            Button("选择…") {
+            LabeledContent("同步文件夹") {
+                if let folderName = syncManager.selectedFolderName {
+                    HStack(spacing: 8) {
+                        Text(folderName)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Menu {
+                            Button("更改同步文件夹…") {
                                 isChoosingFolder = true
                             }
+                            Button("在 Finder 中显示") {
+                                revealFolderInFinder()
+                            }
+                            Divider()
+                            Button("停止使用此文件夹…", role: .destructive) {
+                                isConfirmingFolderRemoval = true
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                        }
+                        .menuStyle(.borderlessButton)
+                        .help("管理同步文件夹")
+                        .accessibilityLabel("管理同步文件夹")
+                    }
+                } else {
+                    HStack(spacing: 8) {
+                        Text("未选择")
+                            .foregroundStyle(.secondary)
+                        Button("选择…") {
+                            isChoosingFolder = true
                         }
                     }
-                }
-
-                if case let .error(message) = syncManager.status {
-                    Text(message)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
                 }
             }
 
-            UpdateSettingsSection(updateManager: updateManager)
+            if case let .error(message) = syncManager.status {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    private var categoryPicker: some View {
+        Picker("设置分类", selection: $selectedCategory) {
+            ForEach(SettingsTab.allCases) { category in
+                Label(category.title, systemImage: category.symbol)
+                    .tag(category)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .frame(maxWidth: 780)
+        .padding(.horizontal, 8)
+        .padding(.bottom, 8)
+    }
+
+    private var categoryNavigation: some View {
+        VStack(spacing: 6) {
+            ForEach(SettingsTab.allCases) { category in
+                Button {
+                    selectedCategory = category
+                } label: {
+                    HStack(spacing: 8) {
+                        AppIconTile(
+                            symbol: category.symbol,
+                            color: selectedCategory == category ? .accentColor : .secondary,
+                            size: 28
+                        )
+                        Text(category.title)
+                            .font(.body.weight(selectedCategory == category ? .semibold : .regular))
+                        Spacer(minLength: 0)
+                        Image(systemName: "checkmark")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(Color.accentColor)
+                            .opacity(selectedCategory == category ? 1 : 0)
+                            .accessibilityHidden(true)
+                    }
+                    .foregroundStyle(.primary)
+                    .padding(8)
+                    .background(
+                        Color.accentColor.opacity(selectedCategory == category ? 0.10 : 0),
+                        in: RoundedRectangle(cornerRadius: AppLayout.cardRadius)
+                    )
+                    .animation(reduceMotion ? nil : AppMotion.feedback, value: selectedCategory)
+                }
+                .buttonStyle(AppCardButtonStyle())
+                .accessibilityAddTraits(selectedCategory == category ? [.isSelected] : [])
+            }
+        }
+        .padding(8)
+        .frame(width: 148)
+        .appSurface()
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("设置分类")
+    }
+
+    private var settingsForm: some View {
+        Form {
+            if selectedCategory == .general {
+                generalSettings
+            }
+            if selectedCategory == .terminal {
+                TerminalSettingsSection(manager: terminalManager)
+            }
+            TerminalAISettingsSection(
+                settings: terminalManager.aiSettings,
+                isVisible: selectedCategory == .ai
+            )
+            if selectedCategory == .sync {
+                syncSettings
+            }
+            if selectedCategory == .updates {
+                UpdateSettingsSection(updateManager: updateManager)
+            }
         }
         .formStyle(.grouped)
-        .frame(maxWidth: 640)
-        .padding(.horizontal, 28)
-        .padding(.top, 20)
+        .scrollContentBackground(.hidden)
+        .frame(maxWidth: 780)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                AppFeatureTitle("设置", subtitle: "按你的习惯，调整窗口、终端与数据同步。")
+                Spacer()
+            }
+            .appFeatureHeaderBackground()
+
+            GeometryReader { geometry in
+                let isWide = geometry.size.width >= 760
+                let layout = isWide
+                    ? AnyLayout(HStackLayout(alignment: .top, spacing: 16))
+                    : AnyLayout(VStackLayout(spacing: 0))
+
+                // Keep the form at the same structural position across size changes.
+                layout {
+                    Group {
+                        if isWide {
+                            categoryNavigation
+                        } else {
+                            categoryPicker
+                        }
+                    }
+                    settingsForm
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+            }
+        }
         .navigationTitle("设置")
         .task { await syncManager.refreshAccountStatus() }
         .fileImporter(
@@ -275,19 +370,15 @@ struct SettingsPreferenceLabel: View {
     let systemImage: String
 
     var body: some View {
-        Label {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .fontWeight(.medium)
-                Text(description)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        } icon: {
+        HStack(spacing: 8) {
             Image(systemName: systemImage)
                 .foregroundStyle(.tint)
+                .frame(width: 20)
+                .accessibilityHidden(true)
+            Text(title)
+                .lineLimit(1)
         }
+        .help(description)
     }
 }
 
@@ -301,7 +392,7 @@ private struct GlobalShortcutRecorder: View {
         VStack(alignment: .trailing, spacing: 6) {
             HStack(spacing: 8) {
                 Text(visibilityController.preferences.shortcut.displayName)
-                    .font(.system(.body, design: .rounded, weight: .semibold))
+                    .font(.body)
                     .padding(.horizontal, 10)
                     .frame(height: 28)
                     .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 7, style: .continuous))

@@ -20,11 +20,13 @@ final class RemoteFileViewModel: ObservableObject {
     @Published var pendingConflict: PendingTransferConflict?
     @Published var fileNamePrompt: FileNamePrompt?
     @Published var showsTransfers = true
+    @Published private(set) var isRemoteLoading = false
     let transfers = TransferManager()
 
     private let localService = LocalFileService()
     private let remoteService = RemoteFileService()
     private let defaults = UserDefaults.standard
+    private var remoteRequestID = UUID()
 
     init() {
         localPath = UserDefaults.standard.string(forKey: "remoteFiles.lastLocalPath") ?? FileManager.default.homeDirectoryForCurrentUser.path
@@ -57,7 +59,14 @@ final class RemoteFileViewModel: ObservableObject {
         catch { presentedError = ServerPresentedError(error) }
     }
 
-    func disconnect() { remoteService.disconnect(); connectionState = .disconnected; remoteItems = []; selectedRemoteIDs.removeAll() }
+    func disconnect() {
+        remoteRequestID = UUID()
+        isRemoteLoading = false
+        remoteService.disconnect()
+        connectionState = .disconnected
+        remoteItems = []
+        selectedRemoteIDs.removeAll()
+    }
 
     func refreshLocal() {
         do {
@@ -70,11 +79,18 @@ final class RemoteFileViewModel: ObservableObject {
 
     func refreshRemote() async {
         guard connectionState == .connected else { return }
+        let path = remotePath
+        let requestID = beginRemoteRequest()
         do {
-            remoteItems = try await remoteService.list(remotePath, showsHiddenFiles: showsHiddenFiles)
+            let items = try await remoteService.list(path, showsHiddenFiles: showsHiddenFiles)
+            guard finishRemoteRequest(requestID) else { return }
+            remoteItems = items
             selectedRemoteIDs.formIntersection(remoteItems.map(\.id))
-            if let id = selectedServerID { defaults.set(remotePath, forKey: "remoteFiles.lastRemotePath.\(id)") }
-        } catch { presentedError = ServerPresentedError(error) }
+            if let id = selectedServerID { defaults.set(path, forKey: "remoteFiles.lastRemotePath.\(id)") }
+        } catch {
+            guard finishRemoteRequest(requestID) else { return }
+            presentedError = ServerPresentedError(error)
+        }
     }
 
     func navigateLocal(to path: String) {
@@ -91,8 +107,10 @@ final class RemoteFileViewModel: ObservableObject {
 
     func navigateRemote(to path: String) async {
         guard connectionState == .connected else { return }
+        let requestID = beginRemoteRequest()
         do {
             let items = try await remoteService.list(path, showsHiddenFiles: showsHiddenFiles)
+            guard finishRemoteRequest(requestID) else { return }
             remotePath = path
             remoteItems = items
             selectedRemoteIDs.removeAll()
@@ -100,6 +118,7 @@ final class RemoteFileViewModel: ObservableObject {
                 defaults.set(path, forKey: "remoteFiles.lastRemotePath.\(id)")
             }
         } catch {
+            guard finishRemoteRequest(requestID) else { return }
             // Keep the current directory and its contents when the destination
             // is a file, is missing, or cannot be read by this account.
             presentedError = ServerPresentedError(error)
@@ -121,6 +140,8 @@ final class RemoteFileViewModel: ObservableObject {
 
     func upload(_ items: [FileItem]? = nil) {
         let values = items ?? selectedLocalItems
+        guard !values.isEmpty, connectionState == .connected else { return }
+        showsTransfers = true
         for item in values {
             let destination = join(remotePath, item.name)
             Task {
@@ -135,6 +156,8 @@ final class RemoteFileViewModel: ObservableObject {
 
     func download(_ items: [FileItem]? = nil) {
         let values = items ?? selectedRemoteItems
+        guard !values.isEmpty, connectionState == .connected else { return }
+        showsTransfers = true
         for item in values {
             let destination = URL(fileURLWithPath: localPath).appending(path: item.name).path
             if FileManager.default.fileExists(atPath: destination) {
@@ -232,6 +255,17 @@ final class RemoteFileViewModel: ObservableObject {
         let url = URL(fileURLWithPath: original); let ext = url.pathExtension; let stem = ext.isEmpty ? url.lastPathComponent : url.deletingPathExtension().lastPathComponent
         var number = 2
         while true { let name = ext.isEmpty ? "\(stem) \(number)" : "\(stem) \(number).\(ext)"; let candidate = url.deletingLastPathComponent().appending(path: name).path; if !FileManager.default.fileExists(atPath: candidate) { return candidate }; number += 1 }
+    }
+    private func beginRemoteRequest() -> UUID {
+        let requestID = UUID()
+        remoteRequestID = requestID
+        isRemoteLoading = true
+        return requestID
+    }
+    private func finishRemoteRequest(_ requestID: UUID) -> Bool {
+        guard remoteRequestID == requestID else { return false }
+        isRemoteLoading = false
+        return true
     }
     nonisolated private static func localTreeSizeStatic(_ path: String) -> Int64 {
         let url = URL(fileURLWithPath: path); let fm = FileManager.default

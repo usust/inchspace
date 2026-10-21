@@ -14,17 +14,14 @@ struct EnvironmentPathManagerView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("PATH").font(.title2.weight(.semibold))
-                    Text("拖动或使用箭头调整目录查找顺序")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
+                Text("PATH").font(.title2.weight(.semibold))
+                    .help("拖动或使用箭头调整目录查找顺序。")
                 Spacer()
                 Button { dismiss() } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
+                    .accessibilityLabel("关闭")
             }
-            .padding(22)
-            .background(.ultraThinMaterial.opacity(0.72))
+            .appFeatureHeaderBackground()
 
             List(selection: $selectedID) {
                 ForEach(entries) { entry in
@@ -53,14 +50,16 @@ struct EnvironmentPathManagerView: View {
             }
             .listStyle(.inset)
 
-            VStack(spacing: 10) {
+            Divider()
+            VStack(spacing: 12) {
                 if let errorMessage {
                     Label(errorMessage, systemImage: "exclamationmark.circle")
                         .font(.caption).foregroundStyle(.red).frame(maxWidth: .infinity, alignment: .leading)
                 }
                 HStack {
-                    TextField("添加目录，例如 /opt/homebrew/bin", text: $newPath)
+                    TextField("目录路径", text: $newPath)
                         .textFieldStyle(.roundedBorder)
+                        .help("例如 /opt/homebrew/bin")
                         .onSubmit(addPath)
                     Button("选择…") { chooseDirectory() }
                     Button("添加", systemImage: "plus") { addPath() }
@@ -81,11 +80,10 @@ struct EnvironmentPathManagerView: View {
                         .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                 }
             }
-            .padding(16)
-            .background(.ultraThinMaterial.opacity(0.66))
+            .padding(AppLayout.pagePadding)
         }
         .frame(width: 720, height: 620)
-        .background(.regularMaterial)
+        .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { entries = service.pathEntries(from: source.value) }
     }
 

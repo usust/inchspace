@@ -23,9 +23,6 @@ struct UpdateSettingsSection: View {
                         .font(.headline)
                     Text("版本 \(AppVersion.displayVersion)")
                         .foregroundStyle(.secondary)
-                    Text("macOS 实用工具箱")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
 
                 Spacer(minLength: 20)
@@ -34,23 +31,25 @@ struct UpdateSettingsSection: View {
                     updateManager.checkForUpdates()
                 } label: {
                     Label("检查更新", systemImage: "arrow.triangle.2.circlepath")
-                        .foregroundStyle(Color.accentColor)
-                        .padding(.vertical, 6)
-                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
                 .disabled(!updateManager.canCheckForUpdates)
             }
             .padding(.vertical, 4)
 
-            Toggle("自动检查更新", isOn: Binding(
+            Toggle(isOn: Binding(
                 get: { updateManager.automaticallyChecksForUpdates },
                 set: { updateManager.setAutomaticallyChecksForUpdates($0) }
-            ))
+            )) {
+                SettingsPreferenceLabel(
+                    title: "自动检查更新",
+                    description: "定期检查是否有可用的新版本",
+                    systemImage: "arrow.triangle.2.circlepath"
+                )
+            }
             .disabled(!updateManager.isConfigured)
 
             if !updateManager.isConfigured {
-                Text("完成 Sparkle 发布密钥配置后即可检查更新。")
+                Text("当前版本暂不支持在线更新。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

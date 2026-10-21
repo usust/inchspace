@@ -150,13 +150,14 @@ final class TerminalAICopilotController: ObservableObject {
         let conversation = conversation(for: sessionID)
         guard !conversation.isStreaming else { return }
         do {
-            let key = try settings.apiKey()
-            guard !key.isEmpty, !settings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            guard !settings.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw TerminalAIError.notConfigured
             }
+            let configuration = try settings.configuration.validated()
+            let key = try settings.apiKey(for: configuration.baseURL)
             let selection = conversation.attachedSelection
             let context = await contextBuilder?(sessionID, selection)
-            let provider = DeepSeekProvider(apiKey: key, model: settings.model)
+            let provider = OpenAICompatibleProvider(configuration: configuration, apiKey: key)
             conversation.send(question: question, context: context, provider: provider)
         } catch {
             conversation.errorMessage = error.localizedDescription

@@ -32,8 +32,7 @@ enum RunnerServerCredentialStore {
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         guard status == errSecSuccess,
               let data = result as? Data,
-              let password = String(data: data, encoding: .utf8),
-              !password.isEmpty else {
+              let password = String(data: data, encoding: .utf8) else {
             if status == errSecItemNotFound {
                 throw RunnerError.processFailed("未找到该服务器的密码，请移除后重新添加服务器。")
             }

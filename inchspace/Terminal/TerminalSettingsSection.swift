@@ -10,7 +10,27 @@ struct TerminalSettingsSection: View {
     }
 
     var body: some View {
-        Section("终端") {
+        Group {
+            sessionSettings
+            appearanceSettings
+                .onChange(of: preferences.fontSize) { _, _ in manager.applyPreferences() }
+                .onChange(of: preferences.fontFamily) { _, _ in manager.applyPreferences() }
+                .onChange(of: preferences.lineHeight) { _, _ in manager.applyPreferences() }
+                .onChange(of: preferences.cursorShape) { _, _ in manager.applyPreferences() }
+                .onChange(of: preferences.cursorBlinks) { _, _ in manager.applyPreferences() }
+                .onChange(of: preferences.theme) { _, _ in manager.applyPreferences() }
+                .onChange(of: preferences.scrollbackLines) { _, _ in manager.applyPreferences() }
+                .onChange(of: preferences.customBackgroundColor) { _, _ in manager.applyPreferences() }
+                .onChange(of: preferences.customForegroundColor) { _, _ in manager.applyPreferences() }
+                .onChange(of: preferences.customCursorColor) { _, _ in manager.applyPreferences() }
+                .onChange(of: preferences.customSelectionColor) { _, _ in manager.applyPreferences() }
+                .onChange(of: preferences.copySelectionAutomatically) { _, _ in manager.applyPreferences() }
+            interactionSettings
+        }
+    }
+
+    private var sessionSettings: some View {
+        Section("会话") {
             LabeledContent {
                 Picker("默认 Shell", selection: $preferences.shellOverride) {
                     Text("系统默认（\(URL(fileURLWithPath: preferences.resolvedShell).lastPathComponent)）").tag("")
@@ -45,8 +65,11 @@ struct TerminalSettingsSection: View {
             }
 
             if preferences.startupDirectory == .custom {
-                TextField("~/Projects", text: $preferences.customDirectory)
-                    .textFieldStyle(.roundedBorder)
+                LabeledContent("自定义目录") {
+                    TextField("~/Projects", text: $preferences.customDirectory)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(minWidth: 160, idealWidth: 240, maxWidth: 360)
+                }
             }
 
             Toggle(isOn: $preferences.cleanShellStartup) {
@@ -57,6 +80,34 @@ struct TerminalSettingsSection: View {
                 )
             }
 
+            LabeledContent {
+                Picker("回滚行数", selection: $preferences.scrollbackLines) {
+                    Text("1,000 行").tag(1_000)
+                    Text("10,000 行").tag(10_000)
+                    Text("50,000 行").tag(50_000)
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+            } label: {
+                SettingsPreferenceLabel(
+                    title: "回滚缓冲区",
+                    description: "每个会话独立保存历史输出",
+                    systemImage: "text.line.last.and.arrowtriangle.forward"
+                )
+            }
+
+            Toggle(isOn: $preferences.inheritWorkingDirectory) {
+                SettingsPreferenceLabel(
+                    title: "分屏继承当前目录",
+                    description: "通过 OSC 7 获取目录；不会解析 Shell Prompt",
+                    systemImage: "arrow.triangle.branch"
+                )
+            }
+        }
+    }
+
+    private var appearanceSettings: some View {
+        Section("外观") {
             LabeledContent {
                 Picker("Prompt", selection: $preferences.promptStyle) {
                     ForEach(TerminalPromptStyle.allCases) { style in Text(style.title).tag(style) }
@@ -72,8 +123,11 @@ struct TerminalSettingsSection: View {
             }
 
             if preferences.promptStyle == .custom {
-                TextField("❯ ", text: $preferences.customPrompt)
-                    .textFieldStyle(.roundedBorder)
+                LabeledContent("自定义 Prompt") {
+                    TextField("❯ ", text: $preferences.customPrompt)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(minWidth: 160, idealWidth: 240, maxWidth: 360)
+                }
             }
 
             LabeledContent {
@@ -103,7 +157,6 @@ struct TerminalSettingsSection: View {
                     systemImage: "textformat.size"
                 )
             }
-
 
             LabeledContent {
                 HStack(spacing: 8) {
@@ -150,7 +203,6 @@ struct TerminalSettingsSection: View {
                 )
             }
 
-
             if preferences.theme == .custom {
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
                     colorField("背景", text: $preferences.customBackgroundColor)
@@ -159,32 +211,11 @@ struct TerminalSettingsSection: View {
                     colorField("选区", text: $preferences.customSelectionColor)
                 }
             }
+        }
+    }
 
-            LabeledContent {
-                Picker("回滚行数", selection: $preferences.scrollbackLines) {
-                    Text("1,000 行").tag(1_000)
-                    Text("10,000 行").tag(10_000)
-                    Text("50,000 行").tag(50_000)
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-            } label: {
-                SettingsPreferenceLabel(
-                    title: "回滚缓冲区",
-                    description: "每个会话独立保存历史输出",
-                    systemImage: "text.line.last.and.arrowtriangle.forward"
-                )
-            }
-
-            Toggle(isOn: $preferences.inheritWorkingDirectory) {
-                SettingsPreferenceLabel(
-                    title: "分屏继承当前目录",
-                    description: "通过 OSC 7 获取目录；不会解析 Shell Prompt",
-                    systemImage: "arrow.triangle.branch"
-                )
-            }
-
-
+    private var interactionSettings: some View {
+        Section("交互") {
             Toggle(isOn: $preferences.copySelectionAutomatically) {
                 SettingsPreferenceLabel(
                     title: "选择后自动复制",
@@ -209,18 +240,6 @@ struct TerminalSettingsSection: View {
                 )
             }
         }
-        .onChange(of: preferences.fontSize) { _, _ in manager.applyPreferences() }
-        .onChange(of: preferences.fontFamily) { _, _ in manager.applyPreferences() }
-        .onChange(of: preferences.lineHeight) { _, _ in manager.applyPreferences() }
-        .onChange(of: preferences.cursorShape) { _, _ in manager.applyPreferences() }
-        .onChange(of: preferences.cursorBlinks) { _, _ in manager.applyPreferences() }
-        .onChange(of: preferences.theme) { _, _ in manager.applyPreferences() }
-        .onChange(of: preferences.scrollbackLines) { _, _ in manager.applyPreferences() }
-        .onChange(of: preferences.customBackgroundColor) { _, _ in manager.applyPreferences() }
-        .onChange(of: preferences.customForegroundColor) { _, _ in manager.applyPreferences() }
-        .onChange(of: preferences.customCursorColor) { _, _ in manager.applyPreferences() }
-        .onChange(of: preferences.customSelectionColor) { _, _ in manager.applyPreferences() }
-        .onChange(of: preferences.copySelectionAutomatically) { _, _ in manager.applyPreferences() }
     }
 
     private var availableShells: [String] {
@@ -230,11 +249,11 @@ struct TerminalSettingsSection: View {
 
     private func colorField(_ title: String, text: Binding<String>) -> some View {
         GridRow {
-            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(title)
             TextField("#RRGGBB", text: text)
                 .font(.system(.body, design: .monospaced))
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 150)
+                .frame(minWidth: 120, idealWidth: 150, maxWidth: 240)
         }
     }
 }

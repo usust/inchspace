@@ -18,6 +18,8 @@ enum SidebarDestination: String, Identifiable {
     case environmentVariables
     case terminal
     case appRepair
+    case appLanguage
+    case autoArchive
     case settings
 
     var id: String { rawValue }
@@ -35,6 +37,8 @@ enum SidebarDestination: String, Identifiable {
         case .environmentVariables: "环境变量"
         case .terminal: "终端"
         case .appRepair: "应用修复"
+        case .appLanguage: "应用语言"
+        case .autoArchive: "自动归档"
         case .settings: "设置"
         }
     }
@@ -52,6 +56,8 @@ enum SidebarDestination: String, Identifiable {
         case .environmentVariables: "curlybraces"
         case .terminal: "terminal"
         case .appRepair: "wrench.and.screwdriver"
+        case .appLanguage: "character.bubble"
+        case .autoArchive: "tray.and.arrow.down"
         case .settings: "gearshape"
         }
     }
@@ -73,6 +79,8 @@ enum SidebarDestination: String, Identifiable {
     ]
 
     static let managementItems: [SidebarDestination] = [
+        .autoArchive,
+        .appLanguage,
         .servers,
         .remoteFiles,
         .environmentVariables,

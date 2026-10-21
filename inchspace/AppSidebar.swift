@@ -9,9 +9,24 @@ import SwiftUI
 
 struct AppSidebar: View {
     @Binding var selection: SidebarDestination?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                AppIconTile(symbol: "square.stack.3d.up", size: 36)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("寸空间").font(.headline)
+                    Text("你的 Mac 工作空间")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
+            .accessibilityElement(children: .combine)
+
             List(selection: $selection) {
                 Section("空间") {
                     ForEach(SidebarDestination.libraryItems) { destination in
@@ -49,23 +64,40 @@ struct AppSidebar: View {
             Button {
                 selection = .settings
             } label: {
-                Label(SidebarDestination.settings.title, systemImage: SidebarDestination.settings.systemImage)
+                Label {
+                    Text(SidebarDestination.settings.title)
+                } icon: {
+                    Image(systemName: SidebarDestination.settings.systemImage)
+                        .frame(width: 20)
+                }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 10)
-                    .frame(height: 30)
+                    .frame(height: 36)
                     .background(
-                        selection == .settings ? Color.accentColor.opacity(0.18) : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        selection == .settings ? Color.accentColor.opacity(0.12) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                     )
             }
-            .buttonStyle(.plain)
-            .padding(8)
+            .buttonStyle(AppCardButtonStyle())
+            .fontWeight(selection == .settings ? .semibold : .regular)
+            .accessibilityAddTraits(selection == .settings ? .isSelected : [])
+            .padding(12)
         }
-        .navigationSplitViewColumnWidth(min: 210, ideal: 236, max: 280)
+        .animation(reduceMotion ? nil : AppMotion.feedback, value: selection)
+        .navigationSplitViewColumnWidth(min: 200, ideal: 224, max: 280)
     }
 
     private func sidebarRow(for destination: SidebarDestination) -> some View {
-        Label(destination.title, systemImage: destination.systemImage)
+        Label {
+            Text(destination.title)
+        } icon: {
+            Image(systemName: destination.systemImage)
+                .symbolRenderingMode(.hierarchical)
+                .frame(width: 20)
+        }
+            .font(.system(size: 13))
+            .fontWeight(selection == destination ? .semibold : .regular)
+            .padding(.vertical, 4)
             .tag(destination)
     }
 }

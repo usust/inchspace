@@ -72,7 +72,7 @@ final class ServerManager: ObservableObject {
 
     func add(_ server: Server, credential: SSHCredential, password: String?) {
         do {
-            if credential.authentication == .password, let password, !password.isEmpty {
+            if credential.authentication == .password, let password {
                 try SSHCredentialStore.savePassword(password, for: server.id)
             }
             servers.append(server)
@@ -90,7 +90,7 @@ final class ServerManager: ObservableObject {
             } else {
                 credentials.append(credential)
             }
-            if credential.authentication == .password, let password, !password.isEmpty {
+            if credential.authentication == .password, let password {
                 try SSHCredentialStore.savePassword(password, for: server.id)
             }
             try save()

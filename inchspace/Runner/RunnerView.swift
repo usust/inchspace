@@ -31,7 +31,6 @@ struct RunnerView: View {
             RunnerBackground()
             VStack(spacing: 0) {
                 header
-                Divider().opacity(0.45)
                 Group {
                     switch page {
                     case .dashboard:
@@ -63,31 +62,22 @@ struct RunnerView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 22) {
-            Text("运行中心")
-                .font(.system(size: 28, weight: .bold, design: .rounded))
-            Spacer()
-            HStack(spacing: 4) {
+        HStack(spacing: AppLayout.featureHeaderSpacing) {
+            AppFeatureTitle("运行中心")
+            Spacer(minLength: 16)
+            Picker("页面", selection: $page) {
                 ForEach(Page.allCases) { item in
-                    Button {
-                        withAnimation(.snappy(duration: 0.25)) { page = item }
-                    } label: {
-                        Label(item.title, systemImage: item.symbol)
-                            .labelStyle(.titleAndIcon)
-                            .padding(.horizontal, 13)
-                            .frame(height: 34)
-                            .background(page == item ? Color.accentColor.opacity(0.18) : Color.clear, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(page == item ? Color.accentColor : Color.primary)
+                    Text(item.title).tag(item)
                 }
             }
-            .padding(4)
-            .background(.ultraThinMaterial, in: Capsule())
-            .overlay { Capsule().strokeBorder(.white.opacity(0.16)) }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .frame(width: 200)
+            Button("新建任务", systemImage: "plus", action: presentNewTaskEditor)
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut("n", modifiers: .command)
         }
-        .padding(.horizontal, 32)
-        .padding(.vertical, 20)
+        .appFeatureHeaderBackground()
     }
 
     private func edit(_ task: RunnerTask) {
@@ -103,24 +93,14 @@ struct RunnerView: View {
 
 struct RunnerBackground: View {
     var body: some View {
-        LinearGradient(
-            colors: [Color.accentColor.opacity(0.09), Color.clear, Color.cyan.opacity(0.04)],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-        .background(Color(nsColor: .windowBackgroundColor))
-        .ignoresSafeArea()
+        Color(nsColor: .windowBackgroundColor)
+            .ignoresSafeArea()
     }
 }
 
 extension View {
-    func runnerGlassCard(cornerRadius: CGFloat = 22) -> some View {
-        background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.2), lineWidth: 1)
-            }
-            .shadow(color: .black.opacity(0.055), radius: 18, y: 8)
+    func runnerGlassCard(cornerRadius: CGFloat = 12) -> some View {
+        appSurface(cornerRadius: cornerRadius)
     }
 }
 

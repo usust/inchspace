@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 struct ServerDashboardView: View {
     @ObservedObject var manager: ServerManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var scope: ServerScope = .all
     @State private var selectedServerID: UUID?
@@ -37,10 +38,10 @@ struct ServerDashboardView: View {
                         edit: { edit(selectedServer) },
                         copyConfiguration: { manager.copyConfiguration(for: selectedServer) },
                         delete: { pendingServerDeletion = selectedServer },
-                        back: { withAnimation(.smooth(duration: 0.24)) { selectedServerID = nil } }
+                        back: { withAnimation(reduceMotion ? nil : AppMotion.transition) { selectedServerID = nil } }
                     )
                     .id(selectedServer.id)
-                    .transition(.opacity.combined(with: .move(edge: .trailing)))
+                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .trailing)))
                 } else {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 30) {
@@ -60,7 +61,7 @@ struct ServerDashboardView: View {
                                 statusForServer: { manager.statuses[$0.id] ?? ServerStatus() },
                                 isFavorite: manager.isFavorite,
                                 select: { server in
-                                    withAnimation(.smooth(duration: 0.24)) { selectedServerID = server.id }
+                                    withAnimation(reduceMotion ? nil : AppMotion.transition) { selectedServerID = server.id }
                                 },
                                 connect: manager.connect,
                                 toggleFavorite: manager.toggleFavorite,
@@ -70,12 +71,13 @@ struct ServerDashboardView: View {
                                 move: manager.move
                             )
                         }
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 22)
+                        .padding(AppLayout.pagePadding)
+                        .frame(maxWidth: AppLayout.contentMaxWidth, alignment: .leading)
+                        .frame(maxWidth: .infinity)
                     }
                     .scrollContentBackground(.hidden)
                     .scrollBounceBehavior(.basedOnSize)
-                    .transition(.opacity.combined(with: .move(edge: .leading)))
+                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .leading)))
                 }
             }
         }
@@ -146,10 +148,7 @@ struct ServerDashboardView: View {
 
     private var toolbar: some View {
         HStack(spacing: AppLayout.featureHeaderSpacing) {
-            AppFeatureTitle(
-                selectedServer == nil ? "服务器" : "服务器详情",
-                subtitle: "远程资产与 SSH 连接管理"
-            )
+            AppFeatureTitle(selectedServer == nil ? "服务器" : "服务器详情")
 
             Spacer(minLength: 16)
 
@@ -197,8 +196,6 @@ struct ServerDashboardView: View {
                 .background(Color.accentColor.opacity(0.09), in: Circle())
             Text("添加你的第一台服务器")
                 .font(.system(size: 23, weight: .semibold, design: .rounded))
-            Text("集中管理 SSH 主机、连接状态和快捷操作。")
-                .font(.callout).foregroundStyle(.secondary)
             Button("添加服务器", systemImage: "plus.circle.fill") {
                 editingServer = nil
                 showsEditor = true
@@ -242,6 +239,7 @@ enum ServerScope: Hashable {
 }
 
 struct ServerGroups: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let groups: [ServerGroup]
     let servers: [Server]
     @Binding var selection: ServerScope
@@ -299,7 +297,7 @@ struct ServerGroups: View {
         color: Color
     ) -> some View {
         Button {
-            withAnimation(.smooth(duration: 0.2)) { selection = scope }
+            withAnimation(reduceMotion ? nil : AppMotion.feedback) { selection = scope }
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: symbol)
@@ -319,17 +317,12 @@ struct ServerGroups: View {
             .padding(.vertical, 9)
             .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
             .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-            .glassEffect(
-                selection == scope
-                    ? .regular.tint(Color.accentColor.opacity(0.18)).interactive()
-                    : .regular.interactive(),
-                in: .rect(cornerRadius: 15)
-            )
+            .appSurface(cornerRadius: 12)
             .overlay {
-                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .strokeBorder(
-                        selection == scope ? Color.accentColor.opacity(0.5) : Color.white.opacity(0.08),
-                        lineWidth: selection == scope ? 1 : 0.6
+                        selection == scope ? Color.accentColor : Color.clear,
+                        lineWidth: 1.5
                     )
             }
         }
@@ -438,6 +431,7 @@ private func sectionHeader(
 }
 
 struct ServerCard: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let server: Server
     let status: ServerStatus
     let favorite: Bool
@@ -482,72 +476,67 @@ struct ServerCard: View {
         .overlay {
             RoundedRectangle(cornerRadius: 15, style: .continuous)
                 .strokeBorder(
-                    hovering ? Color.accentColor.opacity(0.34) : Color.white.opacity(0.14),
-                    lineWidth: hovering ? 1 : 0.7
+                    hovering ? Color.accentColor.opacity(0.6) : Color(nsColor: .separatorColor).opacity(0.5),
+                    lineWidth: 1
                 )
+                .allowsHitTesting(false)
         }
-        .shadow(color: .black.opacity(hovering ? 0.16 : 0.07), radius: hovering ? 20 : 14, y: hovering ? 12 : 7)
-        .animation(.snappy(duration: 0.2), value: hovering)
         .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
         .onHover { hovering = $0 }
+        .animation(reduceMotion ? nil : AppMotion.feedback, value: hovering)
         .background {
             TrackpadHorizontalSwipeObserver(handle: handleTrackpadSwipe)
         }
         .onAppear { swipeOffset = actionsRevealed ? -actionWidth : 0 }
         .onChange(of: actionsRevealed) { _, revealed in
             guard !swipeInProgress else { return }
-            withAnimation(.snappy(duration: 0.24, extraBounce: 0.08)) {
+            withAnimation(reduceMotion ? nil : AppMotion.transition) {
                 swipeOffset = revealed ? -actionWidth : 0
             }
         }
     }
 
     private var cardContent: some View {
-        HStack(alignment: .center, spacing: 12) {
-            ServerSystemIcon(
-                system: status.detectedSystem ?? .unknown,
-                color: isOnline ? Color.accentColor : Color.secondary
-            )
-            .frame(width: 34, height: 34)
-            .background(
-                isOnline ? Color.accentColor.opacity(0.11) : Color.primary.opacity(0.045),
-                in: RoundedRectangle(cornerRadius: 11, style: .continuous)
-            )
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(server.name).font(.headline).lineLimit(1)
-                Text(server.host)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .textSelection(.enabled)
+        Button {
+            if actionsRevealed { closeActions() }
+            else { select() }
+        } label: {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 12) {
+                    ServerSystemIcon(
+                        system: status.detectedSystem ?? .unknown,
+                        color: isOnline ? Color.accentColor : Color.secondary
+                    )
+                    .frame(width: 40, height: 40)
+                    .background(
+                        isOnline ? Color.accentColor.opacity(0.11) : Color.primary.opacity(0.045),
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    )
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(server.name).font(.headline).lineLimit(1)
+                        Text(server.host).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    if favorite {
+                        Image(systemName: "star.fill").font(.caption).foregroundStyle(.secondary)
+                            .accessibilityLabel("已收藏")
+                    }
+                }
+                Divider().opacity(0.5)
+                HStack(spacing: 8) {
+                    Label(status.availability.title, systemImage: isOnline ? "checkmark.circle.fill" : "circle.dashed")
+                    Spacer(minLength: 0)
+                    Text("\(server.user) · :\(server.port)").lineLimit(1)
+                }
+                .font(.caption).foregroundStyle(.secondary)
             }
-
-            Spacer(minLength: 0)
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
-        .overlay {
-            if hovering {
-                LinearGradient(
-                    colors: [Color.white.opacity(0.10), Color.clear],
-                    startPoint: .topLeading,
-                    endPoint: .center
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                .allowsHitTesting(false)
-            }
-        }
-        .contentShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-        .onTapGesture {
-            if actionsRevealed {
-                closeActions()
-            } else {
-                select()
-            }
-        }
+        .buttonStyle(.plain)
+        .help("查看 \(server.name) 的连接与状态")
     }
 
     private func handleTrackpadSwipe(deltaX: CGFloat, phase: NSEvent.Phase) {
@@ -567,7 +556,7 @@ struct ServerCard: View {
             swipeInProgress = false
             let reveal = swipeOffset < -actionWidth * 0.45
             actionsRevealed = reveal
-            withAnimation(.snappy(duration: 0.26, extraBounce: 0.1)) {
+            withAnimation(reduceMotion ? nil : AppMotion.transition) {
                 swipeOffset = reveal ? -actionWidth : 0
             }
         }
@@ -575,7 +564,7 @@ struct ServerCard: View {
 
     private func closeActions() {
         actionsRevealed = false
-        withAnimation(.snappy(duration: 0.22, extraBounce: 0.06)) {
+        withAnimation(reduceMotion ? nil : AppMotion.transition) {
             swipeOffset = 0
         }
     }
@@ -684,7 +673,6 @@ private struct DashboardQuickConnectView: View {
     @State private var host = ""
     @State private var user = NSUserName()
     @State private var port = 22
-    @State private var authentication: ServerAuthentication = .agent
     @State private var errorMessage: String?
 
     var body: some View {
@@ -692,8 +680,6 @@ private struct DashboardQuickConnectView: View {
             Label("快速连接", systemImage: "bolt.fill")
                 .font(.title2.weight(.bold))
                 .foregroundStyle(Color.accentColor)
-            Text("直接连接临时主机，不必先创建服务器资产。")
-                .font(.callout).foregroundStyle(.secondary)
 
             VStack(spacing: 13) {
                 quickField("IP 地址或域名") { TextField("192.168.1.100", text: $host) }
@@ -701,12 +687,6 @@ private struct DashboardQuickConnectView: View {
                     quickField("用户名") { TextField("root", text: $user) }
                     quickField("端口") { TextField("22", value: $port, format: .number).frame(width: 90) }
                 }
-                Picker("认证方式", selection: $authentication) {
-                    ForEach(ServerAuthentication.allCases) { method in
-                        Text(method.title).tag(method)
-                    }
-                }
-                .pickerStyle(.segmented)
             }
             .padding(16)
             .serverGlassCard(cornerRadius: 16)
@@ -770,13 +750,11 @@ private struct DashboardGroupEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(prompt.group == nil ? "新建分组" : "重命名分组").font(.title2.weight(.bold))
-            Text("分组用于按环境或用途组织服务器。")
-                .font(.callout).foregroundStyle(.secondary)
             TextField("分组名称", text: $name).textFieldStyle(.roundedBorder).onSubmit(save)
             HStack {
                 Spacer()
                 Button("取消") { dismiss() }
-                Button("存储", action: save).buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                Button("保存", action: save).buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
@@ -795,19 +773,7 @@ private struct DashboardGroupEditor: View {
 
 private struct DashboardBackground: View {
     var body: some View {
-        ZStack {
-            Color(nsColor: .windowBackgroundColor)
-            LinearGradient(
-                colors: [Color.accentColor.opacity(0.08), Color.clear, Color.cyan.opacity(0.04)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            Circle()
-                .fill(Color.accentColor.opacity(0.045))
-                .frame(width: 520, height: 520)
-                .blur(radius: 90)
-                .offset(x: 260, y: -240)
-        }
-        .ignoresSafeArea()
+        Color(nsColor: .windowBackgroundColor)
+            .ignoresSafeArea()
     }
 }

@@ -77,44 +77,53 @@ struct EnvironmentVariableView: View {
     }
 
     private var toolbar: some View {
-        HStack(spacing: AppLayout.featureHeaderSpacing) {
-            AppFeatureTitle("环境变量", subtitle: "管理本机开发环境变量")
-            Spacer(minLength: 18)
-            Picker("来源", selection: $model.sourceFilter) {
-                ForEach(model.sourceFilters) { filter in
-                    Text(filter.title).tag(filter)
+        VStack(spacing: 14) {
+            HStack(spacing: AppLayout.featureHeaderSpacing) {
+                AppFeatureTitle("环境变量")
+                Spacer(minLength: 16)
+                Button("重新加载", systemImage: "arrow.clockwise") { model.reload() }
+                    .buttonStyle(.bordered)
+                Button("新建变量", systemImage: "plus") { model.newVariable() }
+                    .buttonStyle(.borderedProminent)
+                Menu {
+                    Button("复制重新加载命令", systemImage: "doc.on.doc") { model.copy("source ~/.zprofile") }
+                } label: {
+                    Image(systemName: "ellipsis").frame(width: 18, height: 18)
                 }
+                .menuStyle(.borderlessButton)
+                .help("更多操作")
+                .accessibilityLabel("更多操作")
             }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .frame(width: 142)
-            .help("按环境变量来源过滤")
-            HStack(spacing: 7) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("搜索环境变量", text: $model.searchText)
-                    .textFieldStyle(.plain).focused($searchFocused)
-                if !model.searchText.isEmpty {
-                    Button { model.searchText = "" } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
-                    }.buttonStyle(.plain)
+            HStack(spacing: 12) {
+                HStack(spacing: 7) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("搜索名称、值或来源", text: $model.searchText)
+                        .textFieldStyle(.plain)
+                        .focused($searchFocused)
+                        .accessibilityLabel("搜索环境变量")
+                    if !model.searchText.isEmpty {
+                        Button { model.searchText = "" } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("清除搜索")
+                    }
                 }
+                .padding(.horizontal, 11)
+                .frame(height: 32)
+                .appSurface(cornerRadius: 8)
+                Picker("来源", selection: $model.sourceFilter) {
+                    ForEach(model.sourceFilters) { filter in
+                        Text(filter.title).tag(filter)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 160)
+                .help("按环境变量来源过滤")
             }
-            .padding(.horizontal, 11).frame(width: 245, height: 36)
-            .environmentGlass(cornerRadius: 11, shadow: false)
-
-            Button("重新加载", systemImage: "arrow.clockwise") { model.reload() }
-                .buttonStyle(.bordered)
-            Button("新建变量", systemImage: "plus") { model.newVariable() }
-                .buttonStyle(.borderedProminent)
-            Menu {
-                Button("刷新", systemImage: "arrow.clockwise") { model.reload() }
-                Button("复制重新加载命令", systemImage: "doc.on.doc") { model.copy("source ~/.zprofile") }
-            } label: {
-                Image(systemName: "ellipsis.circle").frame(width: 18, height: 18)
-            }
-            .menuStyle(.borderlessButton).help("更多操作")
         }
-        .appFeatureHeaderBackground(opacity: 0.54)
+        .appFeatureHeaderBackground()
     }
 
     @ViewBuilder
@@ -150,8 +159,6 @@ struct EnvironmentVariableView: View {
                     HStack {
                         Text("\(model.filteredVariables.count) 个变量").font(.caption).foregroundStyle(.secondary)
                         Spacer()
-                        Text("保存后：App 新工具立即生效 · 新终端自动生效")
-                            .font(.caption).foregroundStyle(.tertiary)
                     }
                     .padding(.horizontal, 18).frame(height: 36).background(.ultraThinMaterial.opacity(0.36))
                 }
@@ -398,15 +405,6 @@ private struct EnvironmentRowButtonStyle: ButtonStyle {
 
 private extension View {
     func environmentGlass(cornerRadius: CGFloat, shadow: Bool) -> some View {
-        background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.09), lineWidth: 0.7)
-                    .overlay(alignment: .top) {
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.16), lineWidth: 0.5).mask(LinearGradient(colors: [.white, .clear], startPoint: .top, endPoint: .bottom))
-                    }
-            }
-            .shadow(color: shadow ? .black.opacity(0.12) : .clear, radius: 15, y: 7)
+        appSurface(cornerRadius: cornerRadius)
     }
 }

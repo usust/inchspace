@@ -33,6 +33,7 @@ struct ServerEditorView: View {
     @State private var server: Server
     @State private var credential: SSHCredential
     @State private var password = ""
+    @State private var usesEmptyPassword = false
     @State private var tagText = ""
     @State private var errorMessage: String?
 
@@ -43,6 +44,7 @@ struct ServerEditorView: View {
         let credentialID = server?.credentialID ?? UUID()
         _server = State(initialValue: server ?? Server(name: "", host: "", user: "", credentialID: credentialID))
         _credential = State(initialValue: server.flatMap(manager.credential) ?? SSHCredential(id: credentialID, serverID: server?.id ?? UUID(), authentication: .sshKey))
+        _tagText = State(initialValue: server.map { manager.tags(for: $0).map(\.name).joined(separator: ", ") } ?? "")
     }
 
     var body: some View {
@@ -58,16 +60,14 @@ struct ServerEditorView: View {
             footer
         }
         .frame(width: 720, height: 570)
-        .background(.regularMaterial)
+        .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { credential.serverID = server.id }
     }
 
     private var header: some View {
         HStack {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(originalServer == nil ? "添加服务器" : "编辑服务器").font(.title2.weight(.bold))
-                Text("配置 SSH 主机资产与连接方式").font(.caption).foregroundStyle(.secondary)
-            }
+            Text(originalServer == nil ? "添加服务器" : "编辑服务器")
+                .font(.title2.weight(.semibold))
             Spacer()
         }
         .padding(22)
@@ -81,10 +81,7 @@ struct ServerEditorView: View {
                 } label: {
                     HStack(spacing: 10) {
                         Image(systemName: item.symbol).frame(width: 19)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(item.title).font(.subheadline.weight(.medium))
-                            Text("步骤 \(item.rawValue + 1)").font(.caption2).foregroundStyle(.secondary)
-                        }
+                        Text(item.title).font(.subheadline.weight(.medium))
                         Spacer()
                     }
                     .padding(.horizontal, 11)
@@ -132,9 +129,6 @@ struct ServerEditorView: View {
                 field("用户名") { TextField("root", text: $server.user) }
                 field("端口") { TextField("22", value: $server.port, format: .number).frame(width: 90) }
             }
-            Label("系统将在首次连接检测后自动识别", systemImage: "sparkle.magnifyingglass")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
     }
 
@@ -168,13 +162,18 @@ struct ServerEditorView: View {
                 case .password:
                     field("密码") {
                         RevealablePasswordField(
-                            originalServer == nil ? "服务器登录密码" : "留空以保留当前密码",
+                            originalServer == nil ? "服务器登录密码（可留空）" : "留空以保留当前密码",
                             text: $password
                         )
+                        .disabled(usesEmptyPassword)
+                        if originalServer != nil {
+                            Toggle("使用空密码", isOn: $usesEmptyPassword)
+                        }
                     }
                 case .agent:
-                    Label("连接时使用当前用户的 ssh-agent 和已加载密钥。", systemImage: "checkmark.shield")
+                    Label("使用系统 SSH Agent", systemImage: "checkmark.shield")
                         .font(.callout).foregroundStyle(.secondary)
+                        .help("连接时使用当前用户的 ssh-agent 和已加载密钥。")
                         .padding(14)
                         .serverGlassCard(cornerRadius: 12)
                 }
@@ -200,7 +199,6 @@ struct ServerEditorView: View {
             }
             field("标签") {
                 TextField("Linux, Docker, 生产", text: $tagText)
-                    .onAppear { tagText = manager.tags(for: server).map(\.name).joined(separator: ", ") }
             }
             VStack(alignment: .leading, spacing: 6) {
                 Text("备注").font(.caption).foregroundStyle(.secondary)
@@ -229,7 +227,7 @@ struct ServerEditorView: View {
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
             } else {
-                Button(originalServer == nil ? "添加服务器" : "存储更改", action: save)
+                Button(originalServer == nil ? "添加服务器" : "保存更改", action: save)
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
             }
@@ -239,10 +237,9 @@ struct ServerEditorView: View {
     }
 
     private func editorTitle(_ title: String, detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.title3.weight(.semibold))
-            Text(detail).font(.callout).foregroundStyle(.secondary)
-        }
+        Text(title)
+            .font(.headline)
+            .help(detail)
     }
 
     private func field<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
@@ -272,10 +269,6 @@ struct ServerEditorView: View {
         case .authentication:
             if credential.authentication == .sshKey && credential.keyPath.isEmpty {
                 errorMessage = "请选择用于登录的 SSH 私钥。"
-                return false
-            }
-            if credential.authentication == .password && password.isEmpty && originalServer == nil {
-                errorMessage = "请输入服务器登录密码。"
                 return false
             }
         case .advanced:
@@ -309,9 +302,11 @@ struct ServerEditorView: View {
         let names = tagText.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         server.tagIDs = names.compactMap { manager.tag(named: $0)?.id }
         if originalServer == nil {
-            manager.add(server, credential: credential, password: password.isEmpty ? nil : password)
+            manager.add(server, credential: credential, password: password)
         } else {
-            manager.update(server, credential: credential, password: password.isEmpty ? nil : password)
+            let wasPasswordAuthentication = originalServer.flatMap(manager.credential)?.authentication == .password
+            let updatedPassword: String? = usesEmptyPassword ? "" : (password.isEmpty && wasPasswordAuthentication ? nil : password)
+            manager.update(server, credential: credential, password: updatedPassword)
         }
         onSave(server)
         dismiss()

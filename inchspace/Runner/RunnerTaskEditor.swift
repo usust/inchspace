@@ -7,8 +7,10 @@ struct RunnerTaskEditor: View {
     @State private var portText: String
     @State private var errorMessage: String?
     let onSave: (RunnerTask) -> Void
+    private let isEditing: Bool
 
     init(task: RunnerTask?, onSave: @escaping (RunnerTask) -> Void) {
+        isEditing = task != nil
         _draft = State(initialValue: task ?? RunnerTask(
             name: "",
             command: "",
@@ -23,10 +25,8 @@ struct RunnerTaskEditor: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text(draft.name.isEmpty ? "添加任务" : "编辑任务").font(.title2.weight(.bold))
+                Text(isEditing ? "编辑任务" : "新建任务").font(.title2.weight(.semibold))
                 Spacer()
-                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("保存") { save() }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
             }
             .padding(24)
             Divider()
@@ -64,16 +64,15 @@ struct RunnerTaskEditor: View {
                                 HStack(spacing: 12) {
                                     Image(systemName: draft.launchMode == mode ? "checkmark.circle.fill" : "circle")
                                         .foregroundStyle(draft.launchMode == mode ? Color.accentColor : Color.secondary)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(mode.title).foregroundStyle(.primary)
-                                        Text(mode.detail).font(.caption).foregroundStyle(.secondary)
-                                    }
+                                    Text(mode.title).foregroundStyle(.primary)
                                     Spacer()
                                 }
                                 .padding(12)
                                 .background(draft.launchMode == mode ? Color.accentColor.opacity(0.09) : Color.clear, in: RoundedRectangle(cornerRadius: 12))
                             }
                             .buttonStyle(.plain)
+                            .help(mode.detail)
+                            .accessibilityAddTraits(draft.launchMode == mode ? .isSelected : [])
                         }
                     }
 
@@ -96,10 +95,6 @@ struct RunnerTaskEditor: View {
                                 .buttonStyle(.borderless)
                             }
                         }
-                        if draft.environment.isEmpty {
-                            Text("仅在任务需要特殊配置时添加。敏感信息建议由系统钥匙串或项目配置提供。")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
                     }
 
                     if let errorMessage {
@@ -107,19 +102,29 @@ struct RunnerTaskEditor: View {
                             .font(.caption).foregroundStyle(.red)
                     }
                 }
-                .padding(24)
+                .padding(AppLayout.pagePadding)
             }
+            Divider()
+            HStack {
+                Spacer()
+                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("保存", action: save)
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(.horizontal, AppLayout.pagePadding)
+            .padding(.vertical, 16)
         }
         .frame(width: 610, height: 680)
-        .background(.regularMaterial)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private func field<Content: View>(_ title: String, hint: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text(title).font(.headline)
+            Text(title).font(.subheadline.weight(.medium))
             content()
-            Text(hint).font(.caption).foregroundStyle(.secondary)
         }
+        .help(hint)
     }
 
     private func selectDirectory() {

@@ -14,18 +14,19 @@ struct EnvironmentDetailView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(variable.name).font(.title2.weight(.semibold))
                     Text(variable.sources.allSatisfy(\.isProcessEnvironment)
-                         ? "当前 App 启动时继承，只读"
+                         ? "只读"
                          : (variable.managedByApp ? "由 inchspace 管理" : "来自用户配置"))
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button { dismiss() } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
+                    .accessibilityLabel("关闭")
             }
-            .padding(22).background(.ultraThinMaterial.opacity(0.72))
+            .appFeatureHeaderBackground()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: AppLayout.sectionSpacing) {
                     GroupBox("当前值") {
                         HStack(alignment: .top) {
                             Text(variable.effectiveValue)
@@ -65,9 +66,10 @@ struct EnvironmentDetailView: View {
                             }
                         }
                     }
-                }.padding(22)
+                }.padding(AppLayout.pagePadding)
             }
 
+            Divider()
             HStack {
                 Spacer()
                 Button("完成") { dismiss() }
@@ -82,9 +84,9 @@ struct EnvironmentDetailView: View {
                     }
                 }
             }
-            .padding(16).background(.ultraThinMaterial.opacity(0.66))
+            .padding(AppLayout.pagePadding)
         }
         .frame(width: 590, height: 500)
-        .background(.regularMaterial)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 }

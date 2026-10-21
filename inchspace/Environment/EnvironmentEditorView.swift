@@ -55,15 +55,17 @@ struct EnvironmentEditorView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(variable == nil ? "新建环境变量" : "编辑 \(variable?.name ?? "")")
                         .font(.title2.weight(.semibold))
-                    Text(source?.displayName ?? "应用中新启动的工具会立即使用最新值")
-                        .font(.caption).foregroundStyle(.secondary)
+                    if let source {
+                        Text(source.displayName)
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
                 Button { dismiss() } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
+                    .accessibilityLabel("关闭")
             }
-            .padding(22)
-            .background(.ultraThinMaterial.opacity(0.72))
+            .appFeatureHeaderBackground()
 
             Form {
                 Section("变量") {
@@ -98,24 +100,21 @@ struct EnvironmentEditorView: View {
                         ForEach(Destination.allCases) { Text($0.title).tag($0) }
                     }
                     .disabled(variable != nil)
-                    Text(destination == .automatic
-                         ? (source.map { "将修改 \($0.displayName) 中的定义。" } ?? "新变量默认保存到 ~/.zprofile。")
-                         : "将直接保存到 \(destination.title)。")
-                        .font(.caption).foregroundStyle(.secondary)
+                    LabeledContent("目标文件", value: destination == .automatic
+                                   ? (source?.displayName ?? "~/.zprofile")
+                                   : destination.title)
                 }
 
                 Section("终端命令") {
                     Toggle("同时加入 PATH", isOn: $exportToPath)
                         .disabled(trimmedName == "PATH")
-                    Text("启用后，可以直接运行该目录内的命令；重复加载配置不会产生重复 PATH。")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .help("允许直接运行该目录内的命令。")
                 }
             }
             .formStyle(.grouped)
 
+            Divider()
             HStack {
-                Text("不会修改已运行的外部终端进程")
-                    .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("取消") { dismiss() }
                     .keyboardShortcut(.cancelAction)
@@ -123,12 +122,12 @@ struct EnvironmentEditorView: View {
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
                     .disabled(!isNameValid)
+                    .help("已运行的外部终端需重新加载配置。")
             }
-            .padding(18)
-            .background(.ultraThinMaterial.opacity(0.66))
+            .padding(AppLayout.pagePadding)
         }
         .frame(width: 620, height: 490)
-        .background(.regularMaterial)
+        .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { focusedField = variable == nil ? .name : .value }
     }
 

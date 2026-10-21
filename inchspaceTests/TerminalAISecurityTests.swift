@@ -7,7 +7,7 @@ final class TerminalAISecurityTests: XCTestCase {
         let data = Data(#"{"object":"list","data":[{"id":"deepseek-v4-pro"},{"id":"deepseek-v4-flash"},{"id":"deepseek-v4-pro"}]}"#.utf8)
 
         XCTAssertEqual(
-            try DeepSeekModelService.decodeModels(from: data),
+            try TerminalAIModelService.decodeModels(from: data),
             ["deepseek-v4-flash", "deepseek-v4-pro"]
         )
     }

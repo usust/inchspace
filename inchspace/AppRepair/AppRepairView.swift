@@ -13,26 +13,16 @@ struct AppRepairView: View {
     @State private var showsRepairConfirmation = false
 
     var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: [Color.accentColor.opacity(0.08), Color.clear, Color.cyan.opacity(0.035)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .background(Color(nsColor: .windowBackgroundColor))
-            .ignoresSafeArea()
-
+        VStack(spacing: 0) {
+            header
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    header
-                    content
-                }
-                .frame(maxWidth: 820, alignment: .leading)
-                .padding(.horizontal, 42)
-                .padding(.vertical, 34)
-                .frame(maxWidth: .infinity)
+                content
+                    .frame(maxWidth: AppLayout.contentMaxWidth, alignment: .leading)
+                    .padding(AppLayout.pagePadding)
+                    .frame(maxWidth: .infinity)
             }
         }
+        .background(Color(nsColor: .windowBackgroundColor))
         .alert(item: $model.presentedError) { error in
             Alert(title: Text(error.title), message: Text(error.message), dismissButton: .default(Text("好")))
         }
@@ -49,13 +39,9 @@ struct AppRepairView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Text("应用修复")
-                .font(.system(size: 30, weight: .bold, design: .rounded))
-            Text("快速解决 macOS 应用打开限制与安全验证问题")
-                .font(.system(size: 14))
-                .foregroundStyle(.secondary)
-        }
+        AppFeatureTitle("应用修复")
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .appFeatureHeaderBackground()
     }
 
     @ViewBuilder
@@ -71,35 +57,25 @@ struct AppRepairView: View {
     }
 
     private var dropZone: some View {
-        VStack(spacing: 18) {
+        VStack(spacing: 16) {
             Image(systemName: "shippingbox.and.arrow.backward")
-                .font(.system(size: 38, weight: .medium))
+                .font(.system(size: 32, weight: .medium))
                 .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(Color.accentColor)
-                .frame(width: 78, height: 78)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
 
-            VStack(spacing: 7) {
-                Text("拖入需要修复的应用")
-                    .font(.system(size: 18, weight: .semibold))
-                Text("支持 .app 应用包，也可以从 Finder 中选择")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-            }
+            Text("拖入 .app 应用")
+                .font(.headline)
 
             Button("选择应用…") { model.selectApplication() }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.large)
         }
-        .frame(maxWidth: .infinity, minHeight: 390)
-        .padding(34)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .frame(maxWidth: .infinity, minHeight: 240)
+        .padding(AppLayout.pagePadding)
+        .appSurface()
         .overlay {
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
-                .strokeBorder(isDropTargeted ? Color.accentColor : Color.white.opacity(0.22), lineWidth: isDropTargeted ? 2 : 1)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(isDropTargeted ? Color.accentColor : Color.clear, lineWidth: 2)
         }
-        .shadow(color: .black.opacity(0.08), radius: 24, y: 12)
-        .scaleEffect(isDropTargeted ? 1.008 : 1)
         .animation(.easeOut(duration: 0.16), value: isDropTargeted)
         .dropDestination(for: URL.self) { urls, _ in
             guard let url = urls.first(where: { $0.pathExtension.lowercased() == "app" }) else {
@@ -112,7 +88,7 @@ struct AppRepairView: View {
     }
 
     private func reportView(_ report: AppRepairReport) -> some View {
-        VStack(spacing: 18) {
+        VStack(spacing: AppLayout.sectionSpacing) {
             applicationCard(report)
             findingsCard(report)
             actionCard(report)
@@ -125,7 +101,6 @@ struct AppRepairView: View {
                 .resizable()
                 .interpolation(.high)
                 .frame(width: 64, height: 64)
-                .shadow(color: .black.opacity(0.16), radius: 8, y: 4)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(report.displayName).font(.title3.weight(.semibold))
@@ -141,9 +116,10 @@ struct AppRepairView: View {
             Spacer()
             Button("更换应用") { model.reset() }
                 .buttonStyle(.borderless)
+                .disabled(model.phase == .repairing)
         }
         .padding(20)
-        .glassCard()
+        .appSurface()
     }
 
     private func findingsCard(_ report: AppRepairReport) -> some View {
@@ -160,7 +136,7 @@ struct AppRepairView: View {
             }
         }
         .padding(20)
-        .glassCard()
+        .appSurface()
     }
 
     private func findingRow(_ finding: AppRepairFinding) -> some View {
@@ -210,17 +186,16 @@ struct AppRepairView: View {
             }
         }
         .padding(20)
-        .glassCard()
+        .appSurface()
     }
 
     private func progressCard(title: String, detail: String) -> some View {
         VStack(spacing: 16) {
             ProgressView().controlSize(.large)
-            Text(title).font(.headline)
-            Text(detail).font(.caption).foregroundStyle(.secondary)
+            Text(title).font(.headline).help(detail)
         }
-        .frame(maxWidth: .infinity, minHeight: 320)
-        .glassCard()
+        .frame(maxWidth: .infinity, minHeight: 240)
+        .appSurface()
     }
 
     private var actionTitle: String {
@@ -253,17 +228,6 @@ struct AppRepairView: View {
         case .failure: .red
         case .information: .blue
         }
-    }
-}
-
-private extension View {
-    func glassCard() -> some View {
-        background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
-            }
-            .shadow(color: .black.opacity(0.055), radius: 16, y: 8)
     }
 }
 

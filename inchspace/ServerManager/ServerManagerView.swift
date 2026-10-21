@@ -29,7 +29,6 @@ struct ServerDetailPanel: View {
 
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 290), spacing: 16)], alignment: .leading, spacing: 16) {
                     informationCard
-                    quickActionsCard
                     serviceStatusCard
                     resourceCard
                 }
@@ -54,9 +53,8 @@ struct ServerDetailPanel: View {
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 4)
             }
-            .padding(.horizontal, 28)
-            .padding(.vertical, 26)
-            .frame(maxWidth: 1080, alignment: .leading)
+            .padding(AppLayout.pagePadding)
+            .frame(maxWidth: AppLayout.contentMaxWidth, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
         .scrollContentBackground(.hidden)
@@ -105,16 +103,6 @@ struct ServerDetailPanel: View {
             Button("打开终端", systemImage: "terminal", action: connect)
                 .buttonStyle(.glassProminent)
                 .buttonBorderShape(.capsule)
-            Button("文件管理", systemImage: "folder") {}
-                .buttonStyle(.glass)
-                .buttonBorderShape(.capsule)
-                .disabled(true)
-                .help("文件管理将在后续版本中提供")
-            Button("执行命令", systemImage: "chevron.left.forwardslash.chevron.right") {}
-                .buttonStyle(.glass)
-                .buttonBorderShape(.capsule)
-                .disabled(true)
-                .help("命令执行将在后续版本中提供")
         }
     }
 
@@ -127,19 +115,6 @@ struct ServerDetailPanel: View {
             detailRow("认证", credential?.authentication.title ?? "未配置")
             if let group { detailRow("分组", group.name) }
             if !tags.isEmpty { detailRow("标签", tags.map(\.name).joined(separator: " · ")) }
-        }
-    }
-
-    private var quickActionsCard: some View {
-        GlassSection(title: "快捷操作", symbol: "bolt") {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 116), spacing: 9)], spacing: 9) {
-                DetailAction(title: "打开终端", symbol: "terminal", enabled: true, action: connect)
-                DetailAction(title: "文件管理", symbol: "folder", enabled: false, action: {})
-                DetailAction(title: "执行命令", symbol: "chevron.left.forwardslash.chevron.right", enabled: false, action: {})
-                DetailAction(title: "上传文件", symbol: "arrow.up.doc", enabled: false, action: {})
-                DetailAction(title: "Docker 管理", symbol: "shippingbox", enabled: false, action: {})
-                DetailAction(title: "服务管理", symbol: "gearshape.2", enabled: false, action: {})
-            }
         }
     }
 
@@ -212,30 +187,6 @@ private struct GlassSection<Content: View>: View {
         .padding(17)
         .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
         .serverGlassCard(cornerRadius: 18)
-    }
-}
-
-private struct DetailAction: View {
-    let title: String
-    let symbol: String
-    let enabled: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: symbol).foregroundStyle(enabled ? Color.accentColor : Color.secondary)
-                Text(title).lineLimit(1)
-                Spacer(minLength: 0)
-            }
-            .font(.caption.weight(.medium))
-            .padding(.horizontal, 10)
-            .frame(height: 38)
-            .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        }
-        .buttonStyle(ServerPressButtonStyle())
-        .disabled(!enabled)
-        .help(enabled ? title : "此操作将在后续版本中提供")
     }
 }
 
@@ -312,13 +263,8 @@ private func statusColor(_ availability: ServerAvailability) -> Color {
 }
 
 extension View {
-    func serverGlassCard(cornerRadius: CGFloat = 20, shadow: Bool = true) -> some View {
-        background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.16), lineWidth: 0.7)
-            }
-            .shadow(color: shadow ? .black.opacity(0.055) : .clear, radius: 16, y: 8)
+    func serverGlassCard(cornerRadius: CGFloat = 12, shadow: Bool = true) -> some View {
+        appSurface(cornerRadius: cornerRadius)
     }
 }
 

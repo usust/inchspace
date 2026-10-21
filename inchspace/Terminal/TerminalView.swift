@@ -6,6 +6,7 @@ struct TerminalView: View {
     @ObservedObject var serverManager: ServerManager
     @ObservedObject private var copilot: TerminalAICopilotController
     @State private var pendingClose: TerminalSession?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(manager: TerminalManager, serverManager: ServerManager) {
         self.manager = manager
@@ -18,31 +19,34 @@ struct TerminalView: View {
             header
             GeometryReader { geometry in
                 HSplitView {
-                    VStack(spacing: 0) {
-                        if !manager.sessions.isEmpty {
-                            TerminalTabBar(manager: manager, requestClose: requestClose)
-                        }
-                        Group {
-                            if let session = manager.selectedSession {
-                                terminalWorkspace(primary: session)
-                            } else {
-                                emptyState
-                            }
-                        }
-                    }
-                    .frame(minWidth: 360)
+                    terminalContent
+                        .frame(minWidth: 320)
 
-                    if copilot.isSidebarVisible, let session = manager.selectedSession {
+                    if geometry.size.width >= 780, copilot.isSidebarVisible, let session = manager.selectedSession {
                         AICopilotSidebar(controller: copilot, session: session)
                             .id(session.id)
+                            .transition(.opacity)
                     }
                 }
-                .onChange(of: geometry.size.width, initial: true) { _, width in
-                    if width < 720, copilot.isSidebarVisible {
-                        copilot.isSidebarVisible = false
+                .clipShape(RoundedRectangle(cornerRadius: AppLayout.cardRadius, style: .continuous))
+                .appSurface()
+                .overlay(alignment: .trailing) {
+                    if geometry.size.width < 780, copilot.isSidebarVisible, let session = manager.selectedSession {
+                        AICopilotSidebar(controller: copilot, session: session)
+                            .id(session.id)
+                            .frame(width: min(400, max(320, geometry.size.width - 24)))
+                            .clipShape(RoundedRectangle(cornerRadius: AppLayout.cardRadius, style: .continuous))
+                            .appSurface()
+                            .shadow(color: .black.opacity(0.15), radius: 14, x: -4, y: 4)
+                            .padding(8)
+                            .transition(reduceMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
                     }
                 }
+                .animation(reduceMotion ? nil : AppMotion.transition, value: copilot.isSidebarVisible)
             }
+            .padding(.horizontal, 16)
+            .padding(.top, 4)
+            .padding(.bottom, 16)
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { manager.applyPreferences() }
@@ -64,9 +68,22 @@ struct TerminalView: View {
         .background(shortcutButtons)
     }
 
+    private var terminalContent: some View {
+        VStack(spacing: 0) {
+            if !manager.sessions.isEmpty {
+                TerminalTabBar(manager: manager, requestClose: requestClose)
+            }
+            if let session = manager.selectedSession {
+                terminalWorkspace(primary: session)
+            } else {
+                emptyState
+            }
+        }
+    }
+
     private var header: some View {
         HStack(alignment: .center, spacing: AppLayout.featureHeaderSpacing) {
-            AppFeatureTitle("终端", subtitle: "本机与远程 Shell")
+            AppFeatureTitle("终端", subtitle: "本地与远程会话，专注每一步操作")
             Spacer(minLength: 24)
 
             HStack(spacing: 8) {
@@ -74,12 +91,14 @@ struct TerminalView: View {
                     copilot.isSidebarVisible.toggle()
                 } label: {
                     toolbarSymbol("sparkles")
+                        .foregroundStyle(copilot.isSidebarVisible ? Color.accentColor : Color.primary)
                 }
+                .accessibilityValue(copilot.isSidebarVisible ? "已打开" : "已关闭")
                 .buttonStyle(.glass)
                 .buttonBorderShape(.circle)
-                .help("打开或关闭 AI Copilot（⌘⇧A）")
+                .help("打开或关闭 AI 助手（⌘⇧A）")
                 .disabled(manager.selectedSession == nil)
-                .accessibilityLabel("AI Copilot")
+                .accessibilityLabel("AI 助手")
 
                 Button {
                     manager.selectedSession?.showSearch()
@@ -163,12 +182,7 @@ struct TerminalView: View {
                 .font(.system(size: 42, weight: .light))
                 .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(Color.accentColor)
-            VStack(spacing: 6) {
-                Text("终端").font(.title2.weight(.semibold))
-                Text("运行本地命令或连接远程服务器")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
+            Text("终端").font(.title2.weight(.semibold))
             Button("新建本地终端", systemImage: "plus") {
                 manager.openLocalSession()
             }

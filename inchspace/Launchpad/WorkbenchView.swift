@@ -25,10 +25,15 @@ struct WorkbenchView: View {
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
-                LaunchpadHeaderView(category: $category)
-                    .padding(.horizontal, 34)
-                    .padding(.top, 26)
-                    .padding(.bottom, 16)
+                HStack(spacing: AppLayout.featureHeaderSpacing) {
+                    AppFeatureTitle("启动台", subtitle: "应用、目录与网站，随手可达")
+                    Spacer(minLength: 16)
+                    LaunchpadHeaderView(category: $category)
+                    Button("添加", systemImage: "plus", action: addCurrentCategory)
+                        .buttonStyle(.borderedProminent)
+                        .help("添加\(category.title)")
+                }
+                .appFeatureHeaderBackground()
 
                 LaunchpadGridView(
                     category: category,
@@ -47,15 +52,13 @@ struct WorkbenchView: View {
                     onEditWebsite: { websiteRequest = WebsiteEditRequest(item: $0) },
                     onError: present
                 )
+                .clipShape(RoundedRectangle(cornerRadius: AppLayout.cardRadius, style: .continuous))
+                .appSurface()
+                .padding(.horizontal, AppLayout.pagePadding)
+                .padding(.top, 8)
+                .padding(.bottom, AppLayout.pagePadding)
             }
-            .background {
-                LinearGradient(
-                    colors: [Color.accentColor.opacity(0.045), Color.clear],
-                    startPoint: .topLeading,
-                    endPoint: .center
-                )
-                .background(Color(nsColor: .windowBackgroundColor))
-            }
+            .background(Color(nsColor: .windowBackgroundColor))
             .blur(radius: openedGroupID == nil ? 0 : 3)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: openedGroupID)
 
@@ -231,45 +234,16 @@ struct WorkbenchView: View {
 
 struct LaunchpadHeaderView: View {
     @Binding var category: LaunchItemCategory
-    @Namespace private var selectionAnimation
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 2) {
+        Picker("分类", selection: $category) {
             ForEach(LaunchItemCategory.allCases) { category in
-                categoryButton(category)
+                Text(category.title).tag(category)
             }
         }
-        .padding(3)
-        .background(Color.primary.opacity(0.065), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("分类")
-        .frame(maxWidth: .infinity, minHeight: 38)
-    }
-
-    private func categoryButton(_ item: LaunchItemCategory) -> some View {
-        Button {
-            guard category != item else { return }
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
-                category = item
-            }
-        } label: {
-            Text(item.title)
-                .font(.system(size: 13, weight: category == item ? .semibold : .medium))
-                .foregroundStyle(category == item ? Color.white : Color.primary.opacity(0.68))
-                .frame(width: 72, height: 27)
-                .background {
-                    if category == item {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(Color.accentColor.opacity(0.90))
-                            .matchedGeometryEffect(id: "selected-category", in: selectionAnimation)
-                    }
-                }
-                .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(item.title)
-        .accessibilityAddTraits(category == item ? .isSelected : [])
+        .labelsHidden()
+        .pickerStyle(.segmented)
+        .frame(width: 230)
     }
 }
 

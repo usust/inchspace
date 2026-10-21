@@ -198,7 +198,7 @@ private struct RunnerServerEditor: View {
                 }
                 .pickerStyle(.segmented)
                 if server.authentication == .password {
-                    RevealablePasswordField("密码", text: $password, prompt: "服务器登录密码")
+                    RevealablePasswordField("密码", text: $password, prompt: "服务器登录密码（可留空）")
                 } else {
                     LabeledContent("SSH Key") {
                         HStack {
@@ -231,7 +231,7 @@ private struct RunnerServerEditor: View {
     }
 
     private func save() {
-        let hasAuthentication = server.authentication == .password ? !password.isEmpty : !server.keyPath.isEmpty
+        let hasAuthentication = server.authentication == .password || !server.keyPath.isEmpty
         guard !server.name.isEmpty, !server.host.isEmpty, !server.username.isEmpty, hasAuthentication, (1...65535).contains(server.port) else {
             errorMessage = RunnerError.serverConfiguration.localizedDescription
             return

@@ -10,19 +10,48 @@ struct RemoteFileView: View {
     @State private var editsRemotePath = false
     @State private var localDropTargeted = false
     @State private var remoteDropTargeted = false
+    @State private var actionFeedback: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 0) {
             toolbar
-            HSplitView {
-                filePanel(title: "本机", symbol: "laptopcomputer", path: model.localPath, pathInput: $localPathInput, editsPath: $editsLocalPath, items: model.localItems, selection: $model.selectedLocalIDs, isLocal: true)
-                    .frame(minWidth: 340)
-                filePanel(title: selectedServer?.name ?? "服务器", symbol: "server.rack", path: model.remotePath, pathInput: $remotePathInput, editsPath: $editsRemotePath, items: model.remoteItems, selection: $model.selectedRemoteIDs, isLocal: false)
-                    .frame(minWidth: 340)
+            // Keep the tables' minimum sizes inside the detail column so switching
+            // to this page cannot resize the navigation sidebar or the window.
+            GeometryReader { geometry in
+                // Reserve some divider travel when two 340-point panels do not fit.
+                let minimumPanelWidth = min(340, max(0, (geometry.size.width - 1) * 0.4))
+                HSplitView {
+                    filePanel(title: "本机", symbol: "laptopcomputer", path: model.localPath, pathInput: $localPathInput, editsPath: $editsLocalPath, items: model.localItems, selection: $model.selectedLocalIDs, isLocal: true)
+                        .frame(minWidth: minimumPanelWidth, maxWidth: .infinity)
+                    filePanel(title: selectedServer?.name ?? "服务器", symbol: "server.rack", path: model.remotePath, pathInput: $remotePathInput, editsPath: $editsRemotePath, items: model.remoteItems, selection: $model.selectedRemoteIDs, isLocal: false)
+                        .frame(minWidth: minimumPanelWidth, maxWidth: .infinity)
+                }
+                .frame(width: geometry.size.width, height: geometry.size.height)
             }
-            if model.showsTransfers { transferPanel }
+            .padding(.horizontal, 16)
+            .padding(.top, 4)
+            .padding(.bottom, 12)
+            if model.showsTransfers {
+                transferPanel
+                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+            }
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .overlay(alignment: .top) {
+            if let actionFeedback {
+                Label(actionFeedback, systemImage: "checkmark.circle.fill")
+                    .font(.callout.weight(.medium))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(.regularMaterial, in: Capsule())
+                    .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+                    .padding(.top, 76)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .animation(reduceMotion ? nil : AppMotion.feedback, value: actionFeedback)
+        .animation(reduceMotion ? nil : AppMotion.transition, value: model.showsTransfers)
         .alert(item: $model.presentedError) { error in Alert(title: Text(error.title), message: Text(error.message), dismissButton: .default(Text("好"))) }
         .sheet(item: $model.pendingTrust) { request in trustSheet(request) }
         .sheet(item: $model.pendingConflict) { conflict in conflictSheet(conflict) }
@@ -46,7 +75,7 @@ struct RemoteFileView: View {
 
     private var toolbar: some View {
         HStack(spacing: AppLayout.featureHeaderSpacing) {
-            AppFeatureTitle("远程文件", subtitle: "本机与 SFTP 双栏文件管理")
+            AppFeatureTitle("远程文件", subtitle: "在本机与服务器之间整理、传输文件")
             Spacer()
             HStack(spacing: 7) {
                 Circle().fill(model.connectionState == .connected ? Color.green : (model.connectionState == .connecting ? .orange : .secondary)).frame(width: 7, height: 7)
@@ -87,21 +116,35 @@ struct RemoteFileView: View {
             pathBar(path: path, input: pathInput, edits: editsPath, isLocal: isLocal)
             Table(items, selection: selection) {
                 TableColumn("名称") { item in
-                    HStack(spacing: 7) {
-                        Image(systemName: icon(for: item)).foregroundStyle(item.kind == .directory ? Color.accentColor : .secondary)
-                        VStack(alignment: .leading, spacing: 1) { Text(item.name).lineLimit(1); if let target = item.linkTarget { Text("→ \(target)").font(.caption2).foregroundStyle(.secondary).lineLimit(1) } }
+                    interactiveCell(item, isLocal: isLocal) {
+                        HStack(spacing: 7) {
+                            Image(systemName: icon(for: item)).foregroundStyle(item.kind == .directory ? Color.accentColor : .secondary)
+                            VStack(alignment: .leading, spacing: 1) { Text(item.name).lineLimit(1); if let target = item.linkTarget { Text("→ \(target)").font(.caption2).foregroundStyle(.secondary).lineLimit(1) } }
+                        }
+                        .draggable("\(isLocal ? "inchspace-local:" : "inchspace-remote:")\(item.path)")
                     }
-                    .draggable("\(isLocal ? "inchspace-local:" : "inchspace-remote:")\(item.path)")
                 }.width(min: 150, ideal: 260)
-                TableColumn("大小") { item in Text(item.kind == .directory ? "—" : ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file)).foregroundStyle(.secondary) }.width(min: 70, ideal: 90)
-                TableColumn("修改时间") { item in Text(item.modifiedAt?.formatted(date: .numeric, time: .shortened) ?? "—").foregroundStyle(.secondary) }.width(min: 110, ideal: 140)
-                if !isLocal { TableColumn("权限") { item in Text(item.permissions ?? "—").font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary) }.width(92) }
+                TableColumn("大小") { item in
+                    interactiveCell(item, isLocal: isLocal) {
+                        Text(item.kind == .directory ? "—" : ByteCountFormatter.string(fromByteCount: item.size, countStyle: .file)).foregroundStyle(.secondary)
+                    }
+                }.width(min: 70, ideal: 90)
+                TableColumn("修改时间") { item in
+                    interactiveCell(item, isLocal: isLocal) {
+                        Text(item.modifiedAt?.formatted(date: .numeric, time: .shortened) ?? "—").foregroundStyle(.secondary)
+                    }
+                }.width(min: 110, ideal: 140)
+                if !isLocal {
+                    TableColumn("权限") { item in
+                        interactiveCell(item, isLocal: false) {
+                            Text(item.permissions ?? "—").font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+                        }
+                    }.width(92)
+                }
             }
+            .frame(minWidth: 0, maxWidth: .infinity)
             .contextMenu(forSelectionType: String.self) { ids in
                 selectionMenu(items.filter { ids.contains($0.id) }, isLocal: isLocal)
-            } primaryAction: { ids in
-                guard let item = items.first(where: { ids.contains($0.id) }) else { return }
-                isLocal ? model.openLocal(item) : model.openRemote(item)
             }
             .dropDestination(for: URL.self) { urls, _ in guard !isLocal else { return false }; let lookup = Dictionary(uniqueKeysWithValues: model.localItems.map { (URL(fileURLWithPath: $0.path), $0) }); model.upload(urls.compactMap { lookup[$0] }); return true } isTargeted: { if !isLocal { remoteDropTargeted = $0 } }
             .dropDestination(for: String.self) { values, _ in
@@ -116,13 +159,21 @@ struct RemoteFileView: View {
                 }
             } isTargeted: { targeted in if isLocal { localDropTargeted = targeted } else { remoteDropTargeted = targeted } }
             .overlay { if (isLocal ? localDropTargeted : remoteDropTargeted) { RoundedRectangle(cornerRadius: 10).strokeBorder(Color.accentColor, lineWidth: 2).padding(5).allowsHitTesting(false) } }
+            .overlay {
+                if !isLocal, model.isRemoteLoading {
+                    ProgressView().controlSize(.small).padding(10).background(.regularMaterial, in: Capsule())
+                }
+            }
             HStack {
                 Text("\(items.count) 个项目").font(.caption2).foregroundStyle(.tertiary)
                 Spacer()
                 if isLocal { Button("上传", systemImage: "arrow.up") { model.upload() }.disabled(model.selectedLocalIDs.isEmpty || model.connectionState != .connected) }
                 else { Button("下载", systemImage: "arrow.down") { model.download() }.disabled(model.selectedRemoteIDs.isEmpty || model.connectionState != .connected) }
-            }.buttonStyle(.borderless).padding(.horizontal, 13).frame(height: 36).background(.ultraThinMaterial.opacity(0.36))
+            }.buttonStyle(.borderless).padding(.horizontal, 13).frame(height: 36).background(.quaternary.opacity(0.3))
         }
+        .clipShape(RoundedRectangle(cornerRadius: AppLayout.cardRadius, style: .continuous))
+        .appSurface()
+        .padding(.horizontal, 4)
     }
 
     private func pathBar(path: String, input: Binding<String>, edits: Binding<Bool>, isLocal: Bool) -> some View {
@@ -139,25 +190,25 @@ struct RemoteFileView: View {
     @ViewBuilder private func selectionMenu(_ items: [FileItem], isLocal: Bool) -> some View {
         if isLocal {
             if let item = items.first, items.count == 1 {
-                Button("打开") { model.openLocal(item) }
-                Button("在 Finder 中显示") { LocalFileService().reveal(item) }
+                Button("打开") { performContextMenuAction { model.openLocal(item) } }
+                Button("在 Finder 中显示") { performContextMenuAction { LocalFileService().reveal(item) } }
             }
-            Button("上传到服务器") { model.upload(items) }.disabled(items.isEmpty || model.connectionState != .connected)
+            Button("上传到服务器") { performContextMenuAction { model.upload(items); showFeedback("已加入上传队列") } }.disabled(items.isEmpty || model.connectionState != .connected)
             if let item = items.first, items.count == 1 {
-                Button("复制路径") { copy(item.path) }
-                Button("重命名") { model.promptForRename(item, isLocal: true) }
+                Button("复制路径") { performContextMenuAction { copy(item.path) } }
+                Button("重命名") { performContextMenuAction { model.promptForRename(item, isLocal: true) } }
             }
-            Divider(); Button("移到废纸篓", role: .destructive) { model.pendingLocalDeletion = items }.disabled(items.isEmpty)
+            Divider(); Button("移到废纸篓", role: .destructive) { performContextMenuAction { model.pendingLocalDeletion = items } }.disabled(items.isEmpty)
         } else {
             if let item = items.first, items.count == 1, item.kind != .file {
-                Button("打开") { model.openRemote(item) }
+                Button("打开") { performContextMenuAction { model.openRemote(item) } }
             }
-            Button("下载") { model.download(items) }.disabled(items.isEmpty)
+            Button("下载") { performContextMenuAction { model.download(items); showFeedback("已加入下载队列") } }.disabled(items.isEmpty || model.connectionState != .connected)
             if let item = items.first, items.count == 1 {
-                Button("复制远程路径") { copy(item.path) }
-                Button("重命名") { model.promptForRename(item, isLocal: false) }
+                Button("复制远程路径") { performContextMenuAction { copy(item.path) } }
+                Button("重命名") { performContextMenuAction { model.promptForRename(item, isLocal: false) } }
             }
-            Divider(); Button("删除", role: .destructive) { model.pendingRemoteDeletion = items }.disabled(items.isEmpty)
+            Divider(); Button("删除", role: .destructive) { performContextMenuAction { model.pendingRemoteDeletion = items } }.disabled(items.isEmpty || model.connectionState != .connected)
         }
     }
 
@@ -179,8 +230,12 @@ struct RemoteFileView: View {
                 HStack { Text(transfer.filename).lineLimit(1); Spacer(); Text(transfer.state.title).font(.caption).foregroundStyle(transfer.state == .failed ? Color.red : .secondary) }
                 ProgressView(value: transfer.progress)
                 HStack { Text("\(ByteCountFormatter.string(fromByteCount: transfer.transferredBytes, countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: transfer.totalBytes, countStyle: .file))"); Spacer(); if transfer.bytesPerSecond > 0 { Text("\(ByteCountFormatter.string(fromByteCount: Int64(transfer.bytesPerSecond), countStyle: .file))/s") }; if let eta = transfer.eta { Text("剩余 \(Duration.seconds(eta).formatted(.units(allowed: [.minutes, .seconds], width: .abbreviated)))") } }.font(.caption2).foregroundStyle(.secondary)
+                if let error = transfer.error, transfer.state == .failed {
+                    Text(error).font(.caption2).foregroundStyle(.red).lineLimit(2)
+                }
             }
             if transfer.state == .transferring || transfer.state == .waiting { Button { model.transfers.cancel(transfer.id) } label: { Image(systemName: "xmark.circle") }.buttonStyle(.borderless) }
+            else if transfer.state == .failed { Button { model.transfers.retry(transfer.id) } label: { Image(systemName: "arrow.clockwise.circle") }.buttonStyle(.borderless).help("重试") }
         }.padding(.horizontal, 14).padding(.vertical, 8)
     }
 
@@ -210,7 +265,35 @@ struct RemoteFileView: View {
     }
 
     private func icon(for item: FileItem) -> String { item.kind == .directory ? "folder.fill" : (item.kind == .symbolicLink ? "link" : "doc") }
-    private func copy(_ value: String) { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(value, forType: .string) }
+    private func copy(_ value: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+        showFeedback("已复制路径")
+    }
+
+    private func interactiveCell<Content: View>(_ item: FileItem, isLocal: Bool, @ViewBuilder content: () -> Content) -> some View {
+        content()
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .simultaneousGesture(TapGesture(count: 2).onEnded {
+                isLocal ? model.openLocal(item) : model.openRemote(item)
+            })
+    }
+
+    /// AppKit keeps a contextual menu in its own event-tracking loop. Defer
+    /// presentation and model mutations until that loop has closed; otherwise
+    /// SwiftUI can discard a sheet/dialog request made by the menu action.
+    private func performContextMenuAction(_ action: @escaping () -> Void) {
+        DispatchQueue.main.async(execute: action)
+    }
+
+    private func showFeedback(_ message: String) {
+        actionFeedback = message
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.6))
+            if actionFeedback == message { actionFeedback = nil }
+        }
+    }
 }
 
 private struct FileNameSheet: View {

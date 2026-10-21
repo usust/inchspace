@@ -17,8 +17,10 @@ struct ContentView: View {
     @StateObject private var serverManager: ServerManager
     @StateObject private var terminalManager: TerminalManager
     @StateObject private var remoteFileModel: RemoteFileViewModel
+    @StateObject private var archiveModel = ArchiveViewModel.shared
     private let environmentService: EnvironmentVariableService
     @State private var selection: SidebarDestination? = .workspace
+    @State private var settingsTab: SettingsTab = .general
     @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var visibilityController: AppVisibilityController
 
@@ -39,9 +41,14 @@ struct ContentView: View {
             AppSidebar(selection: $selection)
         } detail: {
             detailView
+                .background(AppPageBackground())
         }
         .navigationSplitViewStyle(.balanced)
-        .onReceive(NotificationCenter.default.publisher(for: .inchspaceOpenSettings)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .inchspaceOpenSettings)) { notification in
+            if let rawValue = notification.userInfo?["tab"] as? String,
+               let requestedTab = SettingsTab(rawValue: rawValue) {
+                settingsTab = requestedTab
+            }
             selection = .settings
         }
         .onReceive(NotificationCenter.default.publisher(for: .inchspaceSelectTerminal)) { _ in
@@ -82,6 +89,10 @@ struct ContentView: View {
             WorkbenchView(repository: repository)
         case .appRepair:
             AppRepairView()
+        case .appLanguage:
+            AppLanguageView()
+        case .autoArchive:
+            ArchiveView(model: archiveModel, aiSettings: terminalManager.aiSettings)
         case .runner:
             RunnerView(store: runnerStore)
         case .servers:
@@ -101,7 +112,7 @@ struct ContentView: View {
                 description: Text("此工具区域将在后续版本中提供。")
             )
         case .settings:
-            SettingsView(syncManager: syncManager, updateManager: updateManager, terminalManager: terminalManager) {
+            SettingsView(syncManager: syncManager, updateManager: updateManager, terminalManager: terminalManager, selectedCategory: $settingsTab) {
                 Task {
                     await repository.startCloudSync()
                     await synchronizePreferences(allowsUpload: true)

@@ -31,6 +31,9 @@ final class ArchiveViewModel: ObservableObject {
     @Published private(set) var loadError: String?
     @Published var onboardingStep: ArchiveOnboardingStep = .welcome
     @Published private(set) var activity: ArchiveActivity = .idle
+    /// Live detail for the status card while a run is in progress.
+    @Published private(set) var progress: ArchiveRunProgress?
+    @Published private(set) var runStartedAt: Date?
     @Published private(set) var isWatching = false
     @Published private(set) var lastSummary: ArchiveRunSummary?
     @Published private(set) var lastRunAt: Date?
@@ -152,27 +155,35 @@ final class ArchiveViewModel: ObservableObject {
             return
         }
         let planner: ArchiveAutopilot.Planner
+        var tuning = ArchiveAITuning.remote
         if usesAI, let settings, let configuration = try? settings.configuration.validated(),
            let key = try? settings.apiKey(for: configuration.baseURL) {
-            planner = { context in
+            tuning = ArchiveAITuning.tuning(for: configuration)
+            planner = { [weak self] context in
                 try await ArchiveAIClient().plan(context: context, preference: ArchiveAIPrompt.defaultPreference,
-                                                 configuration: configuration, apiKey: key)
+                                                 configuration: configuration, apiKey: key) { received in
+                    // Chunks arrive far faster than the eye can follow; publish roughly 20 characters at a time.
+                    guard let current = self?.progress?.receivedCharacters, received - current >= 20 else { return }
+                    self?.progress?.receivedCharacters = received
+                }
             }
         } else {
             planner = { ArchiveLocalPlanner.plan($0) }
         }
-        activity = .working("正在查看文件…")
+        progress = ArchiveRunProgress()
+        runStartedAt = Date()
+        activity = .working(title(for: ArchiveRunProgress()))
         runTask = Task { [weak self] in
-            let autopilot = ArchiveAutopilot(service: service, planner: planner)
+            var autopilot = ArchiveAutopilot(service: service, planner: planner)
+            autopilot.batchSize = tuning.batchSize
+            autopilot.keywordLimit = tuning.keywordLimit
             var failure: String?
             var summary: ArchiveRunSummary?
             do {
                 summary = try await autopilot.run { progress in
-                    switch progress {
-                    case .scanning: self?.activity = .working("正在查看文件…")
-                    case .planning(_, let files): self?.activity = .working("正在规划 \(files) 个文件的归类…")
-                    case .applying(_, let files): self?.activity = .working("正在整理 \(files) 个文件…")
-                    }
+                    guard let self else { return }
+                    self.progress = progress
+                    self.activity = .working(self.title(for: progress))
                 }
             } catch is CancellationError {
             } catch { failure = error.localizedDescription }
@@ -180,8 +191,31 @@ final class ArchiveViewModel: ObservableObject {
         }
     }
 
+    private func title(for progress: ArchiveRunProgress) -> String {
+        switch progress.phase {
+        case .scanning: progress.round == 0 ? "正在查看文件…" : "正在重新扫描文件夹…"
+        case .waitingForStableFiles: "等待 \(progress.remainingFiles) 个新文件写入完成…"
+        case .planning: "正在规划 \(progress.batchFiles) 个文件的归类…"
+        case .applying: "正在整理 \(progress.batchFiles) 个文件…"
+        }
+    }
+
+    /// Secondary line under the title: where this run stands and whether the model is talking.
+    var progressDetail: String? {
+        guard let progress, case .working = activity else { return nil }
+        var parts: [String] = []
+        if progress.round > 0 { parts.append("第 \(progress.round) 轮") }
+        if progress.totalFiles > 0 { parts.append("已处理 \(progress.processedFiles)/\(progress.totalFiles) 个文件") }
+        if progress.phase == .planning, usesAI {
+            parts.append(progress.receivedCharacters > 0 ? "模型已回复 \(progress.receivedCharacters) 字" : "等待模型回复")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
     private func finishRun(summary: ArchiveRunSummary?, failure: String?) async {
         runTask = nil
+        progress = nil
+        runStartedAt = nil
         if let service { state = await service.snapshot() }
         if let failure {
             activity = .failed(failure)

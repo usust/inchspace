@@ -13,7 +13,8 @@ extension ArchiveService {
     }
 
     /// Inventory is a separate local step so users can inspect exactly what will be sent before requesting AI.
-    func prepareAIContext(now: Date = Date(), includeLibraryFiles: Bool = false) throws -> ArchiveAIContext {
+    func prepareAIContext(now: Date = Date(), includeLibraryFiles: Bool = false, limit: Int = 30, keywordLimit: Int = 80) throws -> ArchiveAIContext {
+        let limit = max(1, min(limit, 30))
         try withAccess(state.configuration) { config in
             try ArchiveFileSystem.validateConfiguration(config, stateDirectory: persistence.directory)
             let (directories, directoryWarnings) = try ArchiveDirectoryFileSystem.inventory(config)
@@ -28,8 +29,10 @@ extension ArchiveService {
             var next = state
             var files: [ArchiveAIFile] = []
             var unsettled = 0
+            var pending = 0
             var warnings = directoryWarnings + inboxScan.warnings + libraryScan.warnings
-            if candidates.count > 30 { warnings.append("扫描范围包含 \(candidates.count) 个可读文件，本轮最多提供 30 个；方案仅针对本轮文件，不代表全库最优。") }
+            if candidates.count > limit { warnings.append("扫描范围包含 \(candidates.count) 个可读文件，本轮最多提供 \(limit) 个；方案仅针对本轮文件，不代表全库最优。") }
+            let scanned = Set(candidates.map { $0.url.path })
             for file in candidates {
                 try Task.checkCancellation()
                 if next.operations.contains(where: { $0.source == file.url && [.planned, .undoPlanned, .needsReview].contains($0.status) }) { continue }
@@ -39,24 +42,49 @@ extension ArchiveService {
                     next.observations[file.url.path] = ArchiveObservation(fingerprint: file.fingerprint, firstSeen: now)
                     if config.stableSeconds > 0 { unsettled += 1; continue }
                 } else if let observed, now.timeIntervalSince(observed.firstSeen) < config.stableSeconds { unsettled += 1; continue }
-                guard files.count < 30 else { warnings.append("最多提供 30 个稳定文件，请完成本轮后重新扫描。"); break }
                 guard let root = config.folders.first(where: { $0.role != .excluded && ArchiveFileSystem.contains(file.url, in: $0.url) }) else { continue }
                 // Avoid re-offering explicitly ignored local suggestions unless the file changed.
                 if next.suggestions.contains(where: { $0.source == file.url && $0.fingerprint == file.fingerprint && $0.status == .skipped }) { continue }
+                guard files.count < limit else {
+                    // Count the rest so the caller can show how much of the folder is still ahead.
+                    pending += 1
+                    if pending == 1 { warnings.append("最多提供 \(limit) 个稳定文件，请完成本轮后重新扫描。") }
+                    continue
+                }
                 do {
-                    let evidence = try ArchiveLearning.extract(file, maxBytes: config.maxFileBytes)
+                    // Keyword extraction (PDF, Word, text parsing) is the slow part of a scan; an unchanged file reuses its last result.
+                    let evidence: ArchiveEvidence
+                    if let cached = next.cache[file.url.path], cached.fingerprint == file.fingerprint {
+                        evidence = cached
+                    } else {
+                        evidence = try ArchiveLearning.extract(file, maxBytes: config.maxFileBytes)
+                        next.cache[file.url.path] = evidence
+                    }
                     files.append(ArchiveAIFile(id: UUID().uuidString, rootID: root.id.uuidString,
                                                relativePath: ArchiveDirectoryFileSystem.relativePath(file.url, root: root.url),
                                                source: file.url, fingerprint: file.fingerprint,
-                                               keywords: Array(evidence.words.prefix(80))))
+                                               keywords: Array(evidence.words.prefix(max(0, keywordLimit)))))
                     if let note = evidence.extractionNote { warnings.append("\(file.url.lastPathComponent)：\(note)") }
                 } catch { warnings.append("跳过 \(file.url.lastPathComponent)：\(error.localizedDescription)") }
             }
             if files.isEmpty { warnings.append("没有稳定的待归档文件；新文件需至少 2 秒后重新扫描。仍可规划现有空目录清理。") }
+            // Forget everything known about files that are gone from a scanned root, so the journal does not grow
+            // with the folder's history. Paths outside the scanned roots (a library that was not scanned this
+            // round) are kept, and a truncated scan proves nothing, so it prunes nothing.
+            if !warnings.contains(where: { $0.contains("10,000") }) {
+                let scannedRoots = config.inboxes + (includeLibraryFiles ? config.libraries : [])
+                func isGone(_ path: String) -> Bool {
+                    !scanned.contains(path) && scannedRoots.contains { path == $0.path || path.hasPrefix($0.path + "/") }
+                }
+                // Cached keywords are only useful until the file has been reviewed; settled files drop theirs.
+                next.cache = next.cache.filter { !isGone($0.key) && next.settled?[$0.key] == nil }
+                next.observations = next.observations.filter { !isGone($0.key) }
+                next.settled = next.settled?.filter { !isGone($0.key) }
+            }
             try commit(next)
             let context = ArchiveAIContext(version: state.version, createdAt: now, folders: config.folders,
                                            directories: directories, files: files, warnings: warnings,
-                                           unsettledCount: unsettled)
+                                           unsettledCount: unsettled, pendingCount: pending)
             aiContext = context
             aiPreview = nil
             return context

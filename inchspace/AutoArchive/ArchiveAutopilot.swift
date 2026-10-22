@@ -18,10 +18,33 @@ nonisolated struct ArchiveNeedsReview: LocalizedError, Sendable {
     var errorDescription: String? { message }
 }
 
-nonisolated enum ArchiveRunProgress: Equatable, Sendable {
-    case scanning
-    case planning(round: Int, files: Int)
-    case applying(round: Int, files: Int)
+/// What the run is doing right now and how far along it is, for a progress display.
+nonisolated struct ArchiveRunProgress: Equatable, Sendable {
+    enum Phase: Equatable, Sendable {
+        case scanning
+        /// New files must hold still briefly before they are touched.
+        case waitingForStableFiles
+        case planning
+        case applying
+    }
+
+    var phase: Phase = .scanning
+    var round = 0
+    /// Files offered to the planner in the current round.
+    var batchFiles = 0
+    /// Files already reviewed in this run (moved or deliberately left in place).
+    var processedFiles = 0
+    /// Files still ahead, including the current batch. Zero while unknown.
+    var remainingFiles = 0
+    /// Characters of the model's answer received so far in the current round.
+    var receivedCharacters = 0
+
+    var totalFiles: Int { processedFiles + remainingFiles }
+    /// 0...1 when the folder size is known, nil while scanning the first time.
+    var fraction: Double? {
+        guard totalFiles > 0 else { return nil }
+        return min(1, Double(processedFiles) / Double(totalFiles))
+    }
 }
 
 /// Runs the whole organize cycle without user decisions: scan, plan with the model, validate, apply, remember.
@@ -35,20 +58,31 @@ struct ArchiveAutopilot {
     var stableWait: Duration = .milliseconds(2_300)
     var maxRounds = 60
     var maxAttemptsPerRound = 2
+    /// Files per planning round; a slow local model gets fewer so each answer stays short.
+    var batchSize = 30
+    var keywordLimit = 80
 
     func run(progress: @MainActor (ArchiveRunProgress) -> Void = { _ in }) async throws -> ArchiveRunSummary {
         var summary = ArchiveRunSummary()
+        var status = ArchiveRunProgress()
         var waits = 0
         var round = 0
         while true {
             try Task.checkCancellation()
             guard round < maxRounds else { summary.hasMore = true; break }
-            progress(.scanning)
-            let context = try await service.prepareAIContext()
+            status.phase = .scanning
+            status.batchFiles = 0
+            status.receivedCharacters = 0
+            progress(status)
+            let context = try await service.prepareAIContext(limit: batchSize, keywordLimit: keywordLimit)
+            status.remainingFiles = context.files.count + context.pendingCount
             if context.files.isEmpty {
                 // Newly seen files must hold still for a moment before they are touched.
                 if context.unsettledCount > 0, waits < 3 {
                     waits += 1
+                    status.phase = .waitingForStableFiles
+                    status.remainingFiles = context.unsettledCount
+                    progress(status)
                     try await Task.sleep(for: stableWait)
                     continue
                 }
@@ -56,49 +90,61 @@ struct ArchiveAutopilot {
             }
             waits = 0
             round += 1
-            switch try await attempt(context, round: round, progress: progress) {
+            status.round = round
+            switch try await attempt(context, status: &status, progress: progress) {
             case .done(let result):
                 summary.movedFiles += result.movedFiles
                 summary.createdDirectories += result.createdDirectories
                 summary.removedDirectories += result.removedDirectories
                 if let id = result.batchID { summary.batchIDs.append(id) }
-            case .gaveUp:
+                status.processedFiles += result.reviewedFiles
+            case .gaveUp(let context):
                 // The model could not produce a valid plan for these files; leave them where they are.
                 try await service.markSettled(Dictionary(uniqueKeysWithValues: context.files.map { ($0.source.path, $0.fingerprint) }))
                 summary.leftUntouched += context.files.count
+                status.processedFiles += context.files.count
             }
+            status.remainingFiles = max(0, status.remainingFiles - status.batchFiles)
+            progress(status)
         }
         return summary
     }
 
     private enum Outcome {
         case done(RoundResult)
-        case gaveUp
+        case gaveUp(ArchiveAIContext)
     }
 
     private struct RoundResult {
         var movedFiles = 0
         var createdDirectories = 0
         var removedDirectories = 0
+        var reviewedFiles = 0
         var batchID: UUID?
     }
 
-    private func attempt(_ first: ArchiveAIContext, round: Int, progress: @MainActor (ArchiveRunProgress) -> Void) async throws -> Outcome {
+    private func attempt(_ first: ArchiveAIContext, status: inout ArchiveRunProgress,
+                         progress: @MainActor (ArchiveRunProgress) -> Void) async throws -> Outcome {
         var context = first
         for attempt in 1...maxAttemptsPerRound {
             try Task.checkCancellation()
-            progress(.planning(round: round, files: context.files.count))
+            status.phase = .planning
+            status.batchFiles = context.files.count
+            status.receivedCharacters = 0
+            progress(status)
             do {
                 let response = try await planner(context)
                 let plan = try await service.previewAI(response, contextID: context.id)
                 var result = RoundResult()
                 var settled: [String: ArchiveFingerprint] = [:]
                 var removedPaths: [String] = []
+                result.reviewedFiles = context.files.count
                 if plan.directories.isEmpty && plan.files.isEmpty {
                     // Nothing to improve: remember that, so the same files are not sent again.
                     for file in context.files { settled[file.source.path] = file.fingerprint }
                 } else {
-                    progress(.applying(round: round, files: plan.files.count))
+                    status.phase = .applying
+                    progress(status)
                     let applied = try await service.applyAI(plan.id)
                     guard applied.status == .complete else {
                         throw ArchiveNeedsReview(applied.error ?? "部分文件未能确认移动，请在“历史”中核对。")
@@ -121,13 +167,19 @@ struct ArchiveAutopilot {
                 throw error
             } catch is CancellationError {
                 throw CancellationError()
+            } catch let error as ArchiveAIUnavailable {
+                // The service, not the plan, failed: one more try with half the files, then tell the user.
+                guard attempt < maxAttemptsPerRound else { throw error }
+                context = try await service.prepareAIContext(limit: max(3, context.files.count / 2), keywordLimit: min(keywordLimit, 40))
+                if context.files.isEmpty { return .done(RoundResult()) }
             } catch where error is ArchiveError || error is DecodingError {
-                // The model's plan failed local validation; ask again once with a fresh snapshot.
-                guard attempt < maxAttemptsPerRound else { return .gaveUp }
-                context = try await service.prepareAIContext()
+                // The model's plan failed local validation or was cut short; ask again once with a fresh,
+                // smaller snapshot so a slow model has less to read and less to write.
+                guard attempt < maxAttemptsPerRound else { return .gaveUp(context) }
+                context = try await service.prepareAIContext(limit: max(3, context.files.count / 2), keywordLimit: min(keywordLimit, 40))
                 if context.files.isEmpty { return .done(RoundResult()) }
             }
         }
-        return .gaveUp
+        return .gaveUp(context)
     }
 }

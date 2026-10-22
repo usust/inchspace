@@ -155,6 +155,8 @@ private struct ArchiveDashboardView: View {
             VStack(spacing: 16) {
                 StatusOrb { ProgressView().controlSize(.large) }
                 Text(message).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
+                    .contentTransition(.numericText())
+                ArchiveRunProgressBar(progress: model.progress, detail: model.progressDetail, startedAt: model.runStartedAt)
                 Text(folderLine).font(.callout).foregroundStyle(.secondary)
             }
         case .failed(let message):
@@ -272,6 +274,51 @@ private struct ArchiveDetailsSheet: View {
 }
 
 // MARK: - Shared glass pieces
+
+/// Determinate once the folder size is known, indeterminate before; always shows elapsed time so a
+/// long model call never looks frozen.
+private struct ArchiveRunProgressBar: View {
+    let progress: ArchiveRunProgress?
+    let detail: String?
+    let startedAt: Date?
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Group {
+                if let fraction = progress?.fraction {
+                    ProgressView(value: fraction)
+                } else {
+                    ProgressView(value: nil as Double?)
+                }
+            }
+            .progressViewStyle(.linear)
+            .tint(Color.accentColor)
+            .animation(.easeInOut(duration: 0.4), value: progress?.fraction)
+            HStack(spacing: 6) {
+                if let detail {
+                    Text(detail).contentTransition(.numericText())
+                }
+                Spacer(minLength: 0)
+                if let startedAt {
+                    TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                        Text(elapsed(from: startedAt, to: context.date)).monospacedDigit()
+                    }
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
+        .frame(maxWidth: 360)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func elapsed(from start: Date, to now: Date) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(start)))
+        return seconds < 3_600 ? String(format: "%d:%02d", seconds / 60, seconds % 60)
+            : String(format: "%d:%02d:%02d", seconds / 3_600, seconds % 3_600 / 60, seconds % 60)
+    }
+}
 
 private struct GlassCard<Content: View>: View {
     @ViewBuilder var content: Content

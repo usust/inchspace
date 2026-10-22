@@ -42,6 +42,8 @@ nonisolated struct ArchiveAIContext: Codable, Sendable {
     var warnings: [String]
     /// Files seen for the first time or still changing; they become eligible once stable.
     var unsettledCount = 0
+    /// Stable files that did not fit into this batch and will be offered in a later round.
+    var pendingCount = 0
 }
 
 nonisolated struct ArchiveAIDirectoryRequest: Codable, Sendable {

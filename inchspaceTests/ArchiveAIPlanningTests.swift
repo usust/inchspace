@@ -250,12 +250,14 @@ final class ArchiveAIPlanningTests: XCTestCase {
         let request = try ArchiveAIClient().request(context: context, preference: "主题分类", configuration: configuration, apiKey: "fixture-secret")
         XCTAssertEqual(request.url?.absoluteString, "https://example.invalid/v1/chat/completions")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer fixture-secret")
-        XCTAssertEqual(request.timeoutInterval, 60)
+        XCTAssertEqual(request.timeoutInterval, ArchiveAITuning.remote.idleTimeout)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
         let body = try XCTUnwrap(request.httpBody)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
         XCTAssertEqual(json["model"] as? String, "test-model")
-        XCTAssertEqual(json["stream"] as? Bool, false)
+        XCTAssertEqual(json["stream"] as? Bool, true)
         XCTAssertEqual(json["max_tokens"] as? Int, 6_000)
+        XCTAssertNil(json["chat_template_kwargs"], "remote services may reject unknown parameters")
         let bodyString = String(decoding: body, as: UTF8.self)
         XCTAssertFalse(bodyString.contains("fixture-secret"))
         XCTAssertFalse(bodyString.contains(f.root.path))
@@ -267,6 +269,132 @@ final class ArchiveAIPlanningTests: XCTestCase {
         let local = try ArchiveAIClient().request(context: context, preference: "", configuration:
             TerminalAIConfiguration(service: .ollama, baseURL: "http://localhost:11434/v1", model: "local"), apiKey: "")
         XCTAssertNil(local.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertEqual(local.timeoutInterval, ArchiveAITuning.local.idleTimeout)
+        let localJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(local.httpBody)) as? [String: Any])
+        XCTAssertEqual((localJSON["chat_template_kwargs"] as? [String: Bool])?["enable_thinking"], false)
+        XCTAssertEqual(localJSON["think"] as? Bool, false)
+    }
+
+    func testLocalModelsGetSmallerBatchesAndLongerTimeouts() {
+        XCTAssertTrue(ArchiveAITuning.isLocal(TerminalAIConfiguration(service: .ollama, baseURL: "http://localhost:11434/v1", model: "qwen3.5:9b")))
+        XCTAssertTrue(ArchiveAITuning.isLocal(TerminalAIConfiguration(service: .custom, baseURL: "http://127.0.0.1:1234/v1", model: "qwen")))
+        XCTAssertTrue(ArchiveAITuning.isLocal(TerminalAIConfiguration(service: .custom, baseURL: "http://192.168.1.20:8080/v1", model: "qwen")))
+        XCTAssertFalse(ArchiveAITuning.isLocal(TerminalAIConfiguration(service: .deepSeek, baseURL: "https://api.deepseek.com", model: "deepseek-chat")))
+        let local = ArchiveAITuning.local, remote = ArchiveAITuning.remote
+        XCTAssertLessThan(local.batchSize, remote.batchSize)
+        XCTAssertLessThan(local.keywordLimit, remote.keywordLimit)
+        XCTAssertGreaterThan(local.idleTimeout, remote.idleTimeout)
+        XCTAssertGreaterThan(local.totalTimeout, remote.totalTimeout)
+        XCTAssertTrue(local.disablesThinking)
+    }
+
+    func testDecoderIgnoresThinkingBlocksAndCodeFences() throws {
+        let wrapped = """
+        <think>
+        先看看文件，{"summary":"这不是答案"}……
+        </think>
+        好的，方案如下：
+        ```json
+        {"summary":"无需改动","directories":[],"files":[]}
+        ```
+        """
+        let response = try ArchiveAIPrompt.decode(wrapped)
+        XCTAssertEqual(response.summary, "无需改动")
+        XCTAssertTrue(response.files.isEmpty)
+        XCTAssertEqual(ArchiveAIPrompt.extractJSONObject("  {\"a\":1}  "), "{\"a\":1}")
+        XCTAssertThrowsError(try ArchiveAIPrompt.decode("<think>still thinking"))
+    }
+
+    func testStreamParserHandlesReasoningSplitAnswersTruncationAndErrors() throws {
+        func event(_ delta: [String: Any], finish: String? = nil) -> String {
+            let body: [String: Any] = ["choices": [["delta": delta, "finish_reason": finish ?? ""]]]
+            return "data: " + String(decoding: (try? JSONSerialization.data(withJSONObject: body)) ?? Data(), as: UTF8.self)
+        }
+        var parser = ArchiveAIStreamParser()
+        for line in ["", event(["reasoning_content": "先分析文件……"]), event(["content": "{\"summary\":\"主"]),
+                     event(["content": "题分类\",\"directories\":[],"]), event(["content": "\"files\":[]}"]),
+                     event([:], finish: "stop"), "data: [DONE]"] {
+            try parser.consume(line)
+            if parser.finished { break }
+        }
+        XCTAssertTrue(parser.sawReasoning)
+        XCTAssertEqual(try parser.result().summary, "主题分类")
+
+        var truncated = ArchiveAIStreamParser()
+        try truncated.consume(event(["content": "{\"summary\":\""], finish: "length"))
+        XCTAssertThrowsError(try truncated.result()) { XCTAssertTrue($0.localizedDescription.contains("长度上限")) }
+
+        var failing = ArchiveAIStreamParser()
+        XCTAssertThrowsError(try failing.consume("data: {\"error\":{\"message\":\"model not loaded\"}}")) {
+            XCTAssertTrue($0 is ArchiveAIUnavailable)
+            XCTAssertTrue($0.localizedDescription.contains("model not loaded"))
+        }
+
+        var whole = ArchiveAIStreamParser()
+        try whole.consume("{\"choices\":[{\"message\":{\"content\":\"{\\\"summary\\\":\\\"直连\\\",\\\"directories\\\":[],\\\"files\\\":[]}\"},\"finish_reason\":\"stop\"}]}")
+        XCTAssertEqual(try whole.result().summary, "直连")
+
+        var reasoningOnly = ArchiveAIStreamParser()
+        try reasoningOnly.consume(event(["reasoning_content": "只想了没答"], finish: "stop"))
+        XCTAssertThrowsError(try reasoningOnly.result()) { XCTAssertTrue($0.localizedDescription.contains("思考")) }
+    }
+
+    func testPersistenceRoundTripsStateAndMigratesLegacyJournal() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        var saved = ArchiveState()
+        saved.configuration = f.config
+        saved.version = 7
+        saved.settled = ["/a": ArchiveFingerprint(device: 1, inode: 2, size: 3, modifiedSeconds: 4, modifiedNanoseconds: 5, sha256: "x")]
+        saved.observations = ["/b": ArchiveObservation(fingerprint: saved.settled!["/a"]!, firstSeen: Date(timeIntervalSince1970: 100))]
+        saved.ai = ArchiveAIState(plans: [
+            ArchiveAIPlan(contextID: UUID(), version: 7, summary: "first", directories: [], files: []),
+            ArchiveAIPlan(contextID: UUID(), version: 7, summary: "second", directories: [], files: []),
+        ])
+        // Legacy layout: everything in one JSON file.
+        let legacy = f.state.appendingPathComponent(ArchivePersistence.legacyName)
+        try FileManager.default.createDirectory(at: f.state, withIntermediateDirectories: true)
+        try JSONEncoder().encode(saved).write(to: legacy)
+        do {
+            let persistence = try ArchivePersistence(directory: f.state)
+            let loaded = try persistence.load()
+            XCTAssertEqual(loaded.version, 7)
+            XCTAssertEqual(loaded.settled?["/a"]?.sha256, "x")
+            XCTAssertEqual(loaded.ai?.plans.map(\.summary), ["first", "second"], "array order survives the row store")
+            XCTAssertEqual(loaded.observations["/b"]?.firstSeen, Date(timeIntervalSince1970: 100))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: legacy.path))
+            XCTAssertTrue(FileManager.default.fileExists(atPath: legacy.path + ".migrated"), "the old journal is kept, not deleted")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: f.state.appendingPathComponent(ArchivePersistence.databaseName).path))
+            var next = loaded
+            next.settled = nil
+            next.ai!.plans.removeFirst()
+            next.operations.append(ArchiveOperation(suggestionID: UUID(), source: f.inbox.appendingPathComponent("a"),
+                                                    destination: f.library.appendingPathComponent("a"),
+                                                    fingerprint: saved.settled!["/a"]!, staging: f.inbox, undoStaging: f.library))
+            try persistence.save(next)
+        }
+        let reopened = try ArchivePersistence(directory: f.state).load()
+        XCTAssertNil(reopened.settled, "nil and empty are different states for autopilot")
+        XCTAssertEqual(reopened.ai?.plans.map(\.summary), ["second"])
+        XCTAssertEqual(reopened.operations.count, 1)
+        XCTAssertEqual(reopened.configuration.folders.map(\.url), f.config.folders.map(\.url))
+    }
+
+    func testContextBatchLimitReportsPendingFilesAndReusesKeywordCache() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        for index in 0..<5 { _ = try f.file("note-\(index).txt") }
+        let service = try await f.service()
+        _ = try await service.prepareAIContext(now: Date().addingTimeInterval(-3))
+        let first = try await service.prepareAIContext(limit: 2, keywordLimit: 3)
+        XCTAssertEqual(first.files.count, 2)
+        XCTAssertEqual(first.pendingCount, 3)
+        XCTAssertTrue(first.files.allSatisfy { $0.keywords.count <= 3 })
+        let cached = await service.snapshot().cache
+        XCTAssertEqual(cached.count, 2, "extracted evidence is kept so the next round does not parse the files again")
+        let second = try await service.prepareAIContext(limit: 30)
+        XCTAssertEqual(second.files.count, 5)
+        XCTAssertEqual(second.pendingCount, 0)
     }
 
     func testRecoveryBlocksNewPlansUsingUncertainDirectories() async throws {

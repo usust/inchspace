@@ -14,8 +14,8 @@ extension ArchiveService {
 
     /// Inventory is a separate local step so users can inspect exactly what will be sent before requesting AI.
     func prepareAIContext(now: Date = Date(), includeLibraryFiles: Bool = false, limit: Int = 30, keywordLimit: Int = 80) throws -> ArchiveAIContext {
-        let limit = max(1, min(limit, 30))
-        try withAccess(state.configuration) { config in
+        let batchLimit = max(1, min(limit, 30))
+        return try withAccess(state.configuration) { config in
             try ArchiveFileSystem.validateConfiguration(config, stateDirectory: persistence.directory)
             let (directories, directoryWarnings) = try ArchiveDirectoryFileSystem.inventory(config)
             let inboxScan = try ArchiveFileSystem.scan(config, role: .inbox)
@@ -31,7 +31,7 @@ extension ArchiveService {
             var unsettled = 0
             var pending = 0
             var warnings = directoryWarnings + inboxScan.warnings + libraryScan.warnings
-            if candidates.count > limit { warnings.append("扫描范围包含 \(candidates.count) 个可读文件，本轮最多提供 \(limit) 个；方案仅针对本轮文件，不代表全库最优。") }
+            if candidates.count > batchLimit { warnings.append("扫描范围包含 \(candidates.count) 个可读文件，本轮最多提供 \(batchLimit) 个；方案仅针对本轮文件，不代表全库最优。") }
             let scanned = Set(candidates.map { $0.url.path })
             for file in candidates {
                 try Task.checkCancellation()
@@ -45,10 +45,10 @@ extension ArchiveService {
                 guard let root = config.folders.first(where: { $0.role != .excluded && ArchiveFileSystem.contains(file.url, in: $0.url) }) else { continue }
                 // Avoid re-offering explicitly ignored local suggestions unless the file changed.
                 if next.suggestions.contains(where: { $0.source == file.url && $0.fingerprint == file.fingerprint && $0.status == .skipped }) { continue }
-                guard files.count < limit else {
+                guard files.count < batchLimit else {
                     // Count the rest so the caller can show how much of the folder is still ahead.
                     pending += 1
-                    if pending == 1 { warnings.append("最多提供 \(limit) 个稳定文件，请完成本轮后重新扫描。") }
+                    if pending == 1 { warnings.append("最多提供 \(batchLimit) 个稳定文件，请完成本轮后重新扫描。") }
                     continue
                 }
                 do {

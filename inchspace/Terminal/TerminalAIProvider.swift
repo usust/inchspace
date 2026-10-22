@@ -41,7 +41,7 @@ struct TerminalAIConfiguration: Codable, Equatable, Sendable {
         return Self(service: service, baseURL: url.absoluteString, model: model)
     }
 
-    static func normalizedBaseURL(_ value: String) throws -> URL {
+    nonisolated static func normalizedBaseURL(_ value: String) throws -> URL {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard var components = URLComponents(string: trimmed),
               let scheme = components.scheme?.lowercased(), ["https", "http"].contains(scheme),

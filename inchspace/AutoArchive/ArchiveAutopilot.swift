@@ -47,6 +47,27 @@ nonisolated struct ArchiveRunProgress: Equatable, Sendable {
     }
 }
 
+/// Where one file stands in the current run, for a per-file list next to the progress bar.
+nonisolated struct ArchiveFileActivity: Identifiable, Equatable, Sendable {
+    enum Status: Equatable, Sendable {
+        /// Dropped from a smaller retry batch; a later round picks it up again.
+        case queued
+        case processing
+        /// The result is recorded: moved, or deliberately left in place.
+        case completed
+        /// No valid plan came back, so the file stays where it is.
+        case skipped
+        case failed
+    }
+
+    var id: String { path }
+    var path: String
+    var status: Status
+    var detail: String?
+    var updatedAt = Date()
+    var name: String { (path as NSString).lastPathComponent }
+}
+
 /// Runs the whole organize cycle without user decisions: scan, plan with the model, validate, apply, remember.
 /// Safety checks stay in `ArchiveService`; autopilot only sequences them and never bypasses them.
 @MainActor
@@ -61,6 +82,8 @@ struct ArchiveAutopilot {
     /// Files per planning round; a slow local model gets fewer so each answer stays short.
     var batchSize = 30
     var keywordLimit = 80
+    /// Receives per-file status changes as the run moves through each batch.
+    var report: @MainActor ([ArchiveFileActivity]) -> Void = { _ in }
 
     func run(progress: @MainActor (ArchiveRunProgress) -> Void = { _ in }) async throws -> ArchiveRunSummary {
         var summary = ArchiveRunSummary()
@@ -91,7 +114,17 @@ struct ArchiveAutopilot {
             waits = 0
             round += 1
             status.round = round
-            switch try await attempt(context, status: &status, progress: progress) {
+            let outcome: Outcome
+            do {
+                outcome = try await attempt(context, status: &status, progress: progress)
+            } catch is CancellationError {
+                report(context.files.map { ArchiveFileActivity(path: $0.source.path, status: .queued, detail: "已停止，下次继续") })
+                throw CancellationError()
+            } catch {
+                report(context.files.map { ArchiveFileActivity(path: $0.source.path, status: .failed, detail: error.localizedDescription) })
+                throw error
+            }
+            switch outcome {
             case .done(let result):
                 summary.movedFiles += result.movedFiles
                 summary.createdDirectories += result.createdDirectories
@@ -101,6 +134,7 @@ struct ArchiveAutopilot {
             case .gaveUp(let context):
                 // The model could not produce a valid plan for these files; leave them where they are.
                 try await service.markSettled(Dictionary(uniqueKeysWithValues: context.files.map { ($0.source.path, $0.fingerprint) }))
+                report(context.files.map { ArchiveFileActivity(path: $0.source.path, status: .skipped, detail: "没有得到有效的归类方案，保持原位") })
                 summary.leftUntouched += context.files.count
                 status.processedFiles += context.files.count
             }
@@ -132,12 +166,17 @@ struct ArchiveAutopilot {
             status.batchFiles = context.files.count
             status.receivedCharacters = 0
             progress(status)
+            let current = Set(context.files.map(\.source.path))
+            report(first.files.filter { !current.contains($0.source.path) }
+                .map { ArchiveFileActivity(path: $0.source.path, status: .queued, detail: "稍后分批处理") }
+                + context.files.map { ArchiveFileActivity(path: $0.source.path, status: .processing) })
             do {
                 let response = try await planner(context)
                 let plan = try await service.previewAI(response, contextID: context.id)
                 var result = RoundResult()
                 var settled: [String: ArchiveFingerprint] = [:]
                 var removedPaths: [String] = []
+                var moves: [String: ArchiveOperation] = [:]
                 result.reviewedFiles = context.files.count
                 if plan.directories.isEmpty && plan.files.isEmpty {
                     // Nothing to improve: remember that, so the same files are not sent again.
@@ -152,6 +191,7 @@ struct ArchiveAutopilot {
                     let moved = Set(applied.files.filter { $0.status == .complete }.map(\.source.path))
                     for file in context.files where !moved.contains(file.source.path) { settled[file.source.path] = file.fingerprint }
                     for operation in applied.files where operation.status == .complete {
+                        moves[operation.source.path] = operation
                         settled[operation.destination.path] = operation.fingerprint
                         removedPaths.append(operation.source.path)
                     }
@@ -161,6 +201,10 @@ struct ArchiveAutopilot {
                     result.batchID = applied.id
                 }
                 try await service.markSettled(settled, removing: removedPaths)
+                report(context.files.map { file in
+                    ArchiveFileActivity(path: file.source.path, status: .completed,
+                                        detail: moves[file.source.path].map(Self.describe) ?? "已记录，保持原位")
+                })
                 return .done(result)
             } catch let error as ArchiveNeedsReview {
                 // A half-finished plan is never retried automatically.
@@ -181,5 +225,11 @@ struct ArchiveAutopilot {
             }
         }
         return .gaveUp(context)
+    }
+
+    private static func describe(_ move: ArchiveOperation) -> String {
+        let folder = move.destination.deletingLastPathComponent().lastPathComponent
+        let renamed = move.destination.lastPathComponent != move.source.lastPathComponent
+        return renamed ? "已归入“\(folder)”，并重命名为 \(move.destination.lastPathComponent)" : "已归入“\(folder)”"
     }
 }

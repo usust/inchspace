@@ -37,7 +37,8 @@ final class ArchiveViewModel: ObservableObject {
     @Published private(set) var isWatching = false
     @Published private(set) var lastSummary: ArchiveRunSummary?
     @Published private(set) var lastRunAt: Date?
-    @Published var showDetails = false
+    /// Files seen by recent runs, the ones still in flight first, then newest result first.
+    @Published private(set) var fileActivity: [ArchiveFileActivity] = []
 
     private let defaults: UserDefaults
     private var service: ArchiveService?
@@ -177,6 +178,7 @@ final class ArchiveViewModel: ObservableObject {
             var autopilot = ArchiveAutopilot(service: service, planner: planner)
             autopilot.batchSize = tuning.batchSize
             autopilot.keywordLimit = tuning.keywordLimit
+            autopilot.report = { [weak self] updates in self?.record(updates) }
             var failure: String?
             var summary: ArchiveRunSummary?
             do {
@@ -190,6 +192,21 @@ final class ArchiveViewModel: ObservableObject {
             await self?.finishRun(summary: summary, failure: failure)
         }
     }
+
+    private static let fileActivityLimit = 300
+
+    private func record(_ updates: [ArchiveFileActivity]) {
+        guard !updates.isEmpty else { return }
+        let changed = Set(updates.map(\.path))
+        var merged = fileActivity.filter { !changed.contains($0.path) } + updates
+        merged.sort { lhs, rhs in
+            let left = lhs.status == .processing, right = rhs.status == .processing
+            return left != right ? left : lhs.updatedAt > rhs.updatedAt
+        }
+        fileActivity = Array(merged.prefix(Self.fileActivityLimit))
+    }
+
+    func clearFileActivity() { fileActivity.removeAll { $0.status != .processing } }
 
     private func title(for progress: ArchiveRunProgress) -> String {
         switch progress.phase {

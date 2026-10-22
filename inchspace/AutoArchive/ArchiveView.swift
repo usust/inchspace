@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Auto-archive in one screen: a short first-run guide, then a single glass status card.
+/// Auto-archive in one screen: a short first-run guide, then a status card with per-file progress and history.
 struct ArchiveView: View {
     @ObservedObject var model: ArchiveViewModel
     @ObservedObject var aiSettings: TerminalAISettings
@@ -25,7 +25,6 @@ struct ArchiveView: View {
             model.attach(settings: aiSettings)
             await model.bootstrap()
         }
-        .sheet(isPresented: $model.showDetails) { ArchiveDetailsSheet(model: model) }
     }
 }
 
@@ -133,20 +132,29 @@ private struct ArchiveDashboardView: View {
     @ObservedObject var model: ArchiveViewModel
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            GlassCard {
-                VStack(spacing: 22) {
-                    status
-                    actions
+        ScrollView {
+            VStack(spacing: 0) {
+                ZStack(alignment: .topTrailing) {
+                    GlassCard {
+                        VStack(spacing: 22) {
+                            status
+                            actions
+                        }
+                    }
+                    ArchiveMoreMenu(model: model).padding(44)
                 }
+                VStack(spacing: 20) {
+                    ArchiveFileActivitySection(model: model)
+                    ArchiveHistorySection(model: model)
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 24)
             }
-            Button { model.showDetails = true } label: { Image(systemName: "ellipsis").frame(width: 22, height: 22) }
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-                .accessibilityLabel("更多")
-                .padding(20)
+            .frame(maxWidth: 528)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 16)
         }
-        .frame(maxWidth: 480)
+        .scrollContentBackground(.hidden)
     }
 
     @ViewBuilder private var status: some View {
@@ -208,68 +216,195 @@ private struct ArchiveDashboardView: View {
     }
 }
 
-// MARK: - Secondary details
+// MARK: - Inline details
 
-private struct ArchiveDetailsSheet: View {
+/// The rarely used folder and model actions, as a plain menu rather than a separate page.
+private struct ArchiveMoreMenu: View {
     @ObservedObject var model: ArchiveViewModel
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("整理记录").font(.title3.weight(.semibold))
-                Spacer()
-                Button("完成") { dismiss() }.buttonStyle(.glassProminent)
+        Menu {
+            if let folder = model.workspace {
+                Button("在访达中显示", systemImage: "folder") { model.reveal(folder.url) }
             }
-            .padding(20)
-            if model.batches.isEmpty {
-                ContentUnavailableView("还没有整理记录", systemImage: "tray")
-                    .frame(maxHeight: .infinity)
-            } else {
-                List(model.batches) { plan in
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("\(plan.createdAt.formatted(.relative(presentation: .named)))").font(.body.weight(.medium))
-                            Text(detail(plan)).font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Button("撤销") { Task { await model.undo(plan) } }
-                            .buttonStyle(.glass)
-                            .disabled(model.isRunning)
-                    }
-                    .padding(.vertical, 4)
-                }
-                .scrollContentBackground(.hidden)
-            }
-            Divider()
-            HStack(spacing: 10) {
-                if let folder = model.workspace {
-                    Button("在访达中显示", systemImage: "folder") { model.reveal(folder.url) }
-                }
-                Button("更换文件夹", systemImage: "arrow.triangle.2.circlepath") { model.chooseFolder() }
-                Button("重新整理全部", systemImage: "arrow.clockwise") {
-                    dismiss()
-                    Task { await model.reorganizeEverything() }
-                }
+            Button("更换文件夹…", systemImage: "arrow.triangle.2.circlepath") { model.chooseFolder() }
+            Button("重新整理全部", systemImage: "arrow.clockwise") { Task { await model.reorganizeEverything() } }
                 .disabled(model.isRunning)
-                Spacer()
-                Button(model.usesAI ? "改用本机整理" : "使用 AI 整理", systemImage: model.usesAI ? "desktopcomputer" : "sparkles") {
-                    model.setAI(!model.usesAI)
-                }
-                Button("模型设置", systemImage: "cpu") { dismiss(); model.openModelSettings() }
+            Divider()
+            Button(model.usesAI ? "改用本机整理" : "使用 AI 整理", systemImage: model.usesAI ? "desktopcomputer" : "sparkles") {
+                model.setAI(!model.usesAI)
             }
-            .buttonStyle(.glass)
-            .labelStyle(.titleAndIcon)
-            .padding(16)
+            Button("模型设置…", systemImage: "cpu") { model.openModelSettings() }
+        } label: {
+            Image(systemName: "ellipsis").frame(width: 22, height: 22)
         }
-        .frame(width: 680, height: 520)
-        .background(.ultraThinMaterial)
+        .menuIndicator(.hidden)
+        .buttonStyle(.glass)
+        .buttonBorderShape(.circle)
+        .fixedSize()
+        .accessibilityLabel("更多")
+    }
+}
+
+private struct ArchiveFileActivitySection: View {
+    @ObservedObject var model: ArchiveViewModel
+
+    var body: some View {
+        ArchivePanel(title: "文件处理", trailing: counts) {
+            if model.fileActivity.isEmpty {
+                ArchivePanelEmpty(symbol: "doc.text.magnifyingglass", text: model.isRunning ? "正在查找需要整理的文件…" : "开始整理后，这里会逐个列出文件的识别结果")
+            } else {
+                LazyVStack(spacing: 0) {
+                    ForEach(model.fileActivity) { item in
+                        ArchiveFileActivityRow(item: item)
+                        if item.id != model.fileActivity.last?.id { Divider().padding(.leading, 40) }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var counts: some View {
+        if !model.fileActivity.isEmpty {
+            HStack(spacing: 10) {
+                ForEach(ArchiveFileStatusStyle.order, id: \.self) { status in
+                    let count = model.fileActivity.filter { $0.status == status }.count
+                    if count > 0 {
+                        let style = ArchiveFileStatusStyle(status)
+                        Label("\(style.title) \(count)", systemImage: style.symbol)
+                            .foregroundStyle(style.color)
+                            .contentTransition(.numericText())
+                    }
+                }
+                if !model.isRunning {
+                    Button("清空") { model.clearFileActivity() }.buttonStyle(.borderless)
+                }
+            }
+            .font(.caption)
+            .labelStyle(.titleAndIcon)
+        }
+    }
+}
+
+private struct ArchiveFileActivityRow: View {
+    let item: ArchiveFileActivity
+
+    var body: some View {
+        let style = ArchiveFileStatusStyle(item.status)
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Group {
+                if item.status == .processing {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: style.symbol).foregroundStyle(style.color)
+                }
+            }
+            .frame(width: 18)
+            .font(.body.weight(.semibold))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.name).font(.body).lineLimit(1).truncationMode(.middle)
+                if let detail = item.detail {
+                    Text(detail).font(.caption).foregroundStyle(item.status == .failed ? Color.red : .secondary)
+                        .lineLimit(2).textSelection(.enabled)
+                }
+            }
+            Spacer(minLength: 8)
+            Text(style.title)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(style.color)
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(style.color.opacity(0.14), in: Capsule())
+        }
+        .padding(.vertical, 8)
+        .help(item.path)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct ArchiveFileStatusStyle {
+    static let order: [ArchiveFileActivity.Status] = [.processing, .queued, .completed, .skipped, .failed]
+
+    let title: String
+    let symbol: String
+    let color: Color
+
+    init(_ status: ArchiveFileActivity.Status) {
+        switch status {
+        case .queued: (title, symbol, color) = ("等待中", "clock", .secondary)
+        case .processing: (title, symbol, color) = ("处理中", "circle.dotted", .accentColor)
+        case .completed: (title, symbol, color) = ("已完成", "checkmark.circle.fill", .green)
+        case .skipped: (title, symbol, color) = ("已跳过", "arrow.uturn.right.circle.fill", .orange)
+        case .failed: (title, symbol, color) = ("失败", "xmark.octagon.fill", .red)
+        }
+    }
+}
+
+private struct ArchiveHistorySection: View {
+    @ObservedObject var model: ArchiveViewModel
+
+    var body: some View {
+        ArchivePanel(title: "整理记录", trailing: EmptyView()) {
+            if model.batches.isEmpty {
+                ArchivePanelEmpty(symbol: "tray", text: "还没有整理记录")
+            } else {
+                LazyVStack(spacing: 0) {
+                    ForEach(model.batches) { plan in
+                        HStack(spacing: 12) {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).frame(width: 18)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(plan.createdAt.formatted(.relative(presentation: .named))).font(.body.weight(.medium))
+                                Text(detail(plan)).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("撤销") { Task { await model.undo(plan) } }
+                                .buttonStyle(.glass)
+                                .disabled(model.isRunning)
+                        }
+                        .padding(.vertical, 8)
+                        if plan.id != model.batches.last?.id { Divider().padding(.leading, 30) }
+                    }
+                }
+            }
+        }
     }
 
     private func detail(_ plan: ArchiveAIPlan) -> String {
         let moved = plan.files.filter { $0.status == .complete }.count
         let created = plan.directories.filter { $0.action == .create && $0.status == .complete }.count
         return created == 0 ? "移动了 \(moved) 个文件" : "移动了 \(moved) 个文件，新建 \(created) 个文件夹"
+    }
+}
+
+private struct ArchivePanel<Trailing: View, Content: View>: View {
+    let title: String
+    let trailing: Trailing
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(title).font(.headline)
+                Spacer(minLength: 8)
+                trailing
+            }
+            content
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+}
+
+private struct ArchivePanelEmpty: View {
+    let symbol: String
+    let text: String
+
+    var body: some View {
+        Label(text, systemImage: symbol)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 18)
     }
 }
 

@@ -63,6 +63,38 @@ final class ArchiveAutopilotTests: XCTestCase {
         XCTAssertTrue(ArchiveFileSystem.exists(source))
     }
 
+    func testReportsPerFileStatusAsBatchesFinish() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let source = try f.file("invoice-2026.txt")
+        let service = try await f.service()
+        var autopilot = f.autopilot(service) { context in
+            let file = try XCTUnwrap(context.files.first)
+            return f.response(file: file, directory: "Finance")
+        }
+        var reported: [ArchiveFileActivity] = []
+        autopilot.report = { reported += $0 }
+        _ = try await autopilot.run()
+        XCTAssertEqual(reported.map(\.status), [.processing, .completed])
+        XCTAssertEqual(reported.last?.path, source.path)
+        XCTAssertEqual(reported.last?.detail, "已归入“Finance”")
+    }
+
+    func testReportsSkippedFilesWhenNoValidPlanArrives() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        _ = try f.file("invoice.txt")
+        let service = try await f.service()
+        var autopilot = f.autopilot(service) { context in
+            let file = try XCTUnwrap(context.files.first)
+            return f.response(file: file, directory: "../Escape")
+        }
+        var reported: [ArchiveFileActivity] = []
+        autopilot.report = { reported += $0 }
+        _ = try await autopilot.run()
+        XCTAssertEqual(reported.last?.status, .skipped)
+    }
+
     func testUndoKeepsRestoredFileSettled() async throws {
         let f = try Fixture()
         defer { f.remove() }

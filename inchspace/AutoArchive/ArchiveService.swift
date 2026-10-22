@@ -40,6 +40,13 @@ actor ArchiveService {
             next.observations = [:]
             next.cache = [:]
             next.settled = nil
+            // Results stay: unchanged, organized files keep their review. Unresolved ones are looked at again,
+            // since a broader scope may hold a place for them.
+            if var files = next.files {
+                for (path, record) in files where !record.isResolved { files[path]?.structure = nil }
+                next.files = files
+            }
+            next.consolidatedStructure = nil
             for index in next.suggestions.indices where next.suggestions[index].status == .pending {
                 next.suggestions[index].status = .stale
             }

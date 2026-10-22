@@ -184,8 +184,12 @@ private struct ArchiveDashboardView: View {
     }
 
     private var idleTitle: String {
-        if let summary = model.lastSummary, !summary.isEmpty { return "刚刚整理了 \(summary.movedFiles) 个文件" }
-        return "文件夹很整齐"
+        guard let summary = model.lastSummary, !summary.isEmpty else { return "文件夹很整齐" }
+        var parts: [String] = []
+        if summary.renamedFiles > 0 { parts.append("改名 \(summary.renamedFiles) 个文件") }
+        if summary.movedFiles > 0 { parts.append("归类 \(summary.movedFiles) 个文件") }
+        if summary.movedDirectories > 0 { parts.append("调整 \(summary.movedDirectories) 个文件夹") }
+        return parts.isEmpty ? "刚刚整理了文件夹" : "刚刚" + parts.joined(separator: "、")
     }
 
     private var folderLine: String {
@@ -322,7 +326,7 @@ private struct ArchiveFileActivityRow: View {
 }
 
 private struct ArchiveFileStatusStyle {
-    static let order: [ArchiveFileActivity.Status] = [.processing, .queued, .completed, .skipped, .failed]
+    static let order: [ArchiveFileActivity.Status] = [.processing, .queued, .completed, .unplaced, .skipped, .failed]
 
     let title: String
     let symbol: String
@@ -333,6 +337,7 @@ private struct ArchiveFileStatusStyle {
         case .queued: (title, symbol, color) = ("等待中", "clock", .secondary)
         case .processing: (title, symbol, color) = ("处理中", "circle.dotted", .accentColor)
         case .completed: (title, symbol, color) = ("已完成", "checkmark.circle.fill", .green)
+        case .unplaced: (title, symbol, color) = ("未归位", "questionmark.folder.fill", .yellow)
         case .skipped: (title, symbol, color) = ("已跳过", "arrow.uturn.right.circle.fill", .orange)
         case .failed: (title, symbol, color) = ("失败", "xmark.octagon.fill", .red)
         }
@@ -369,9 +374,16 @@ private struct ArchiveHistorySection: View {
     }
 
     private func detail(_ plan: ArchiveAIPlan) -> String {
-        let moved = plan.files.filter { $0.status == .complete }.count
+        let files = plan.files.filter { $0.status == .complete }
+        let renamed = files.filter { $0.source.deletingLastPathComponent() == $0.destination.deletingLastPathComponent() }.count
         let created = plan.directories.filter { $0.action == .create && $0.status == .complete }.count
-        return created == 0 ? "移动了 \(moved) 个文件" : "移动了 \(moved) 个文件，新建 \(created) 个文件夹"
+        let folders = plan.directories.filter { $0.action == .move && $0.status == .complete }.count
+        var parts: [String] = []
+        if renamed > 0 { parts.append("改名 \(renamed) 个文件") }
+        if files.count > renamed { parts.append("移动 \(files.count - renamed) 个文件") }
+        if folders > 0 { parts.append("调整 \(folders) 个文件夹") }
+        if created > 0 { parts.append("新建 \(created) 个文件夹") }
+        return parts.isEmpty ? "没有可撤销的更改" : parts.joined(separator: "，")
     }
 }
 

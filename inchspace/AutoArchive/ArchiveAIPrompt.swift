@@ -141,6 +141,11 @@ struct ArchiveAIClient {
 
     func request(context: ArchiveAIContext, preference: String, configuration: TerminalAIConfiguration,
                  apiKey: String) throws -> URLRequest {
+        try request(system: ArchiveAIPrompt.system, user: try ArchiveAIPrompt.payload(context: context, preference: preference),
+                    configuration: configuration, apiKey: apiKey)
+    }
+
+    func request(system: String, user: String, configuration: TerminalAIConfiguration, apiKey: String) throws -> URLRequest {
         let configuration = try configuration.validated()
         let tuning = tuning ?? ArchiveAITuning.tuning(for: configuration)
         let url = try configuration.endpoint("chat/completions")
@@ -155,8 +160,7 @@ struct ArchiveAIClient {
         if !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
         var body: [String: Any] = [
             "model": configuration.model, "stream": true, "max_tokens": 6_000,
-            "messages": [["role": "system", "content": ArchiveAIPrompt.system],
-                         ["role": "user", "content": try ArchiveAIPrompt.payload(context: context, preference: preference)]],
+            "messages": [["role": "system", "content": system], ["role": "user", "content": user]],
         ]
         if tuning.disablesThinking {
             // llama.cpp, vLLM and LM Studio read chat_template_kwargs; Ollama reads think. Both ignore the other.
@@ -170,6 +174,18 @@ struct ArchiveAIClient {
     func plan(context: ArchiveAIContext, preference: String, configuration: TerminalAIConfiguration,
               apiKey: String, onProgress: @MainActor (Int) -> Void = { _ in }) async throws -> ArchiveAIResponse {
         let request = try request(context: context, preference: preference, configuration: configuration, apiKey: apiKey)
+        return try ArchiveAIPrompt.decode(try await send(request, configuration: configuration, onProgress: onProgress))
+    }
+
+    /// One streamed request with the given instructions; returns the answer text without reasoning.
+    func complete(system: String, user: String, configuration: TerminalAIConfiguration, apiKey: String,
+                  onProgress: @MainActor (Int) -> Void = { _ in }) async throws -> String {
+        let request = try request(system: system, user: user, configuration: configuration, apiKey: apiKey)
+        return try await send(request, configuration: configuration, onProgress: onProgress)
+    }
+
+    private func send(_ request: URLRequest, configuration: TerminalAIConfiguration,
+                      onProgress: @MainActor (Int) -> Void) async throws -> String {
         let tuning = tuning ?? ArchiveAITuning.tuning(for: (try? configuration.validated()) ?? configuration)
         let configurationForSession = URLSessionConfiguration.ephemeral
         configurationForSession.timeoutIntervalForRequest = tuning.idleTimeout
@@ -199,7 +215,7 @@ struct ArchiveAIClient {
         } catch let error as URLError where error.code == .timedOut {
             throw ArchiveAIUnavailable("模型输出中途停顿超过 \(Int(tuning.idleTimeout)) 秒，已放弃本轮。可减少待整理文件数量或换用更快的模型。")
         }
-        return try parser.result()
+        return try parser.text()
     }
 }
 
@@ -235,6 +251,11 @@ nonisolated struct ArchiveAIStreamParser {
     }
 
     func result() throws -> ArchiveAIResponse {
+        try ArchiveAIPrompt.decode(try text())
+    }
+
+    /// The answer text, once it is known to be complete and not just reasoning.
+    func text() throws -> String {
         var answer = content
         var reason = finishReason
         if !sawEvents {
@@ -249,7 +270,7 @@ nonisolated struct ArchiveAIStreamParser {
             }
             throw ArchiveError("AI 未返回归档计划。")
         }
-        return try ArchiveAIPrompt.decode(answer)
+        return answer
     }
 
     private static func event(from payload: String) throws -> Event? {

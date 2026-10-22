@@ -7,7 +7,23 @@ nonisolated struct ArchiveDirectoryPermission: Codable, Equatable, Sendable {
 
 nonisolated enum ArchiveDirectoryActionKind: String, Codable, Sendable {
     case create, removeEmpty
-    var title: String { self == .create ? "新建目录" : "删除空目录" }
+    /// Moves or renames a whole folder in one exclusive rename; its contents keep their identity.
+    case move
+    var title: String {
+        switch self {
+        case .create: "新建目录"
+        case .removeEmpty: "删除空目录"
+        case .move: "移动目录"
+        }
+    }
+    /// Order inside a plan: parents first, then folder moves, then cleanup.
+    var order: Int {
+        switch self {
+        case .create: 0
+        case .move: 1
+        case .removeEmpty: 2
+        }
+    }
 }
 
 nonisolated struct ArchiveDirectoryIdentity: Codable, Equatable, Sendable {
@@ -44,6 +60,8 @@ nonisolated struct ArchiveAIContext: Codable, Sendable {
     var unsettledCount = 0
     /// Stable files that did not fit into this batch and will be offered in a later round.
     var pendingCount = 0
+    /// A digest of the folder layout at scan time; see `ArchiveFileRecord.structure`.
+    var structure = ""
 }
 
 nonisolated struct ArchiveAIDirectoryRequest: Codable, Sendable {
@@ -51,6 +69,8 @@ nonisolated struct ArchiveAIDirectoryRequest: Codable, Sendable {
     var rootID: String
     var relativePath: String
     var reason: String
+    /// For `move`: the folder being moved, relative to the same root.
+    var source: String? = nil
 }
 
 nonisolated struct ArchiveAIFileRequest: Codable, Sendable {
@@ -77,6 +97,8 @@ nonisolated struct ArchiveDirectoryOperation: Codable, Identifiable, Sendable {
     var resultingIdentity: ArchiveDirectoryIdentity?
     var status: ArchiveOperationStatus = .planned
     var error: String?
+    /// For `move`: where the folder was before.
+    var source: URL?
 }
 
 nonisolated struct ArchiveAIPlan: Codable, Identifiable, Sendable {
@@ -89,6 +111,8 @@ nonisolated struct ArchiveAIPlan: Codable, Identifiable, Sendable {
     var files: [ArchiveOperation]
     var status: ArchiveOperationStatus = .planned
     var error: String?
+    /// Results to save for each file, keyed by source path; written in the same commit as the file's move.
+    var records: [String: ArchiveFileRecord]?
 }
 
 nonisolated struct ArchiveAIState: Codable, Sendable {

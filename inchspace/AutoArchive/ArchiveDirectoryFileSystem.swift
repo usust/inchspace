@@ -1,9 +1,18 @@
+import CryptoKit
 import Darwin
 import Foundation
 
 nonisolated enum ArchiveDirectoryFileSystem {
     static func relativePath(_ url: URL, root: URL) -> String {
         url.path == root.path ? "" : String(url.path.dropFirst(root.path.count + 1))
+    }
+
+    /// One plain folder name: no separators, hidden prefix, control characters or surrounding blanks.
+    static func isValidComponent(_ component: String) -> Bool {
+        !component.isEmpty && component != "." && component != ".." && !component.hasPrefix(".") && !component.hasPrefix("~") &&
+        component == component.precomposedStringWithCanonicalMapping && component.utf8.count <= 240 &&
+        component == component.trimmingCharacters(in: .whitespacesAndNewlines) &&
+        !component.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) || "/:\\".unicodeScalars.contains($0) })
     }
 
     static func target(rootID: String, relativePath: String, configuration: ArchiveConfiguration,
@@ -16,12 +25,7 @@ nonisolated enum ArchiveDirectoryFileSystem {
             return (root, root.url)
         }
         let parts = relativePath.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
-        guard !relativePath.isEmpty, parts.count <= 6, parts.allSatisfy({ component in
-            !component.isEmpty && component != "." && component != ".." && !component.hasPrefix(".") && !component.hasPrefix("~") &&
-            component == component.precomposedStringWithCanonicalMapping && component.utf8.count <= 240 &&
-            component == component.trimmingCharacters(in: .whitespacesAndNewlines) &&
-            !component.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) || ":\\".unicodeScalars.contains($0) })
-        }) else { throw ArchiveError("AI 目录路径无效：仅接受最多六层的普通相对目录名。") }
+        guard !relativePath.isEmpty, parts.count <= 6, parts.allSatisfy(isValidComponent) else { throw ArchiveError("AI 目录路径无效：仅接受最多六层的普通相对目录名。") }
         let url = parts.reduce(root.url) { $0.appendingPathComponent($1, isDirectory: true) }
         try checkScope(url, root: root, configuration: configuration)
         return (root, url)
@@ -89,6 +93,12 @@ nonisolated enum ArchiveDirectoryFileSystem {
         return (directories, warnings)
     }
 
+    /// A short digest of the folder layout. It changes whenever a folder is added, removed, renamed or moved.
+    static func signature(_ directories: [ArchiveAIDirectory]) -> String {
+        let listing = directories.map { $0.rootID + "/" + $0.relativePath }.sorted().joined(separator: "\n")
+        return SHA256.hash(data: Data(listing.utf8)).prefix(12).map { String(format: "%02x", $0) }.joined()
+    }
+
     static func validateCreate(_ target: URL) throws {
         guard !ArchiveFileSystem.exists(target) else { throw ArchiveError("新建目录的目标已存在：\(target.path)") }
         try ArchiveFileSystem.checkCollision(target, ignoring: target)
@@ -129,5 +139,31 @@ nonisolated enum ArchiveDirectoryFileSystem {
             throw ArchiveError("目录已非空或不可删除，已保留：\(target.path)")
         }
         _ = fsync(parent)
+    }
+
+    /// Moves a folder with one exclusive rename, so its contents never exist in two places and nothing is overwritten.
+    static func move(_ source: URL, to target: URL, expected: ArchiveDirectoryIdentity) throws -> ArchiveDirectoryIdentity {
+        guard try identity(source) == expected else { throw ArchiveError("目录身份或权限已变化，请重新规划：\(source.path)") }
+        guard !ArchiveFileSystem.contains(target, in: source) else { throw ArchiveError("不能把目录移动到它自己里面。") }
+        guard !ArchiveFileSystem.exists(target) else { throw ArchiveError("目标目录已存在：\(target.path)") }
+        try ArchiveFileSystem.checkCollision(target, ignoring: source)
+        let sourceParent = try ArchiveFileSystem.openDirectory(source.deletingLastPathComponent())
+        defer { close(sourceParent) }
+        let targetParent = try ArchiveFileSystem.openDirectory(target.deletingLastPathComponent())
+        defer { close(targetParent) }
+        var info = stat(), parentInfo = stat()
+        guard fstatat(sourceParent, source.lastPathComponent, &info, AT_SYMLINK_NOFOLLOW) == 0,
+              info.st_mode & S_IFMT == S_IFDIR, info.st_dev == expected.device, info.st_ino == expected.inode,
+              fstat(targetParent, &parentInfo) == 0, parentInfo.st_dev == expected.device else {
+            throw ArchiveError("移动前目录发生变化，或目标位于其他磁盘。")
+        }
+        guard renameatx_np(sourceParent, source.lastPathComponent, targetParent, target.lastPathComponent, UInt32(RENAME_EXCL)) == 0 else {
+            throw ArchiveError("无法移动目录（目标可能已被占用）：\(String(cString: strerror(errno)))")
+        }
+        _ = fsync(sourceParent)
+        _ = fsync(targetParent)
+        let moved = try identity(target)
+        guard moved.device == expected.device, moved.inode == expected.inode else { throw ArchiveError("移动后目录身份不一致，请检查：\(target.path)") }
+        return moved
     }
 }

@@ -121,8 +121,50 @@ nonisolated enum ArchiveFileSystem {
                                    sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()), data)
     }
 
-    static func fingerprint(_ url: URL, maxBytes: Int) throws -> ArchiveFingerprint {
-        try read(url, maxBytes: maxBytes).0
+    /// Identity plus a content hash. The file is streamed, so size does not matter and nothing large is held in memory.
+    /// `maxBytes` only bounds reads that keep the content (`read`); hashing has no size limit.
+    static func fingerprint(_ url: URL, maxBytes: Int = .max) throws -> ArchiveFingerprint {
+        let parent = try openDirectory(url.deletingLastPathComponent())
+        defer { close(parent) }
+        let fd = openat(parent, url.lastPathComponent, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { throw posixError("读取文件失败：\(url.lastPathComponent)") }
+        defer { close(fd) }
+        var before = stat()
+        guard fstat(fd, &before) == 0, before.st_mode & S_IFMT == S_IFREG, before.st_nlink == 1 else {
+            throw ArchiveError("只处理普通的单链接文件。")
+        }
+        var hasher = SHA256()
+        var buffer = [UInt8](repeating: 0, count: 1 << 20)
+        while true {
+            try Task.checkCancellation()
+            let count = Darwin.read(fd, &buffer, buffer.count)
+            if count == 0 { break }
+            if count < 0 {
+                if errno == EINTR { continue }
+                throw posixError("读取文件失败")
+            }
+            buffer.withUnsafeBytes { hasher.update(bufferPointer: UnsafeRawBufferPointer(rebasing: $0.prefix(count))) }
+        }
+        var after = stat(), current = stat()
+        guard fstat(fd, &after) == 0,
+              fstatat(parent, url.lastPathComponent, &current, AT_SYMLINK_NOFOLLOW) == 0,
+              sameStat(before, after), sameStat(after, current) else {
+            throw ArchiveError("文件在读取时发生变化，请重新扫描。")
+        }
+        return ArchiveFingerprint(device: after.st_dev, inode: after.st_ino, size: after.st_size,
+                                  modifiedSeconds: Int64(after.st_mtimespec.tv_sec),
+                                  modifiedNanoseconds: Int64(after.st_mtimespec.tv_nsec),
+                                  sha256: hasher.finalize().map { String(format: "%02x", $0) }.joined())
+    }
+
+    /// Identity, size and modification time without reading the file. Enough to tell that a file is unchanged;
+    /// `sha256` is left empty and filled in only for files that are actually processed.
+    static func quickFingerprint(_ url: URL) throws -> ArchiveFingerprint {
+        var info = stat()
+        guard lstat(url.path, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { throw ArchiveError("不是普通文件：\(url.lastPathComponent)") }
+        return ArchiveFingerprint(device: info.st_dev, inode: info.st_ino, size: info.st_size,
+                                  modifiedSeconds: Int64(info.st_mtimespec.tv_sec),
+                                  modifiedNanoseconds: Int64(info.st_mtimespec.tv_nsec), sha256: "")
     }
 
     private static func sameStat(_ a: stat, _ b: stat) -> Bool {
@@ -132,7 +174,9 @@ nonisolated enum ArchiveFileSystem {
         a.st_ctimespec.tv_sec == b.st_ctimespec.tv_sec && a.st_ctimespec.tv_nsec == b.st_ctimespec.tv_nsec
     }
 
-    static func scan(_ config: ArchiveConfiguration, role: ArchiveFolderRole) throws -> ArchiveScanResult {
+    /// Lists the regular files under the roots. With `hashing: false` only metadata is read, which keeps a
+    /// rescan of a large, mostly unchanged folder fast.
+    static func scan(_ config: ArchiveConfiguration, role: ArchiveFolderRole, hashing: Bool = true) throws -> ArchiveScanResult {
         var result = ArchiveScanResult()
         let roots = role == .inbox ? config.inboxes : config.libraries
         var visited = 0
@@ -165,7 +209,7 @@ nonisolated enum ArchiveFileSystem {
                     if values.isDirectory == true { continue }
                     guard values.isRegularFile == true,
                           !["part", "crdownload", "download", "tmp", "swp"].contains(url.pathExtension.lowercased()) else { continue }
-                    let fp = try fingerprint(url, maxBytes: config.maxFileBytes)
+                    let fp = hashing ? try fingerprint(url) : try quickFingerprint(url)
                     result.files.append(ArchiveEvidence(url: url, fingerprint: fp, words: [], extractionNote: nil))
                 } catch {
                     enumerator.skipDescendants()

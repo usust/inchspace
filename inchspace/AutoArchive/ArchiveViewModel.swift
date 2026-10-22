@@ -155,21 +155,18 @@ final class ArchiveViewModel: ObservableObject {
             rerunRequested = runTask != nil
             return
         }
-        let planner: ArchiveAutopilot.Planner
+        let planner: ArchiveStagePlanner
         var tuning = ArchiveAITuning.remote
         if usesAI, let settings, let configuration = try? settings.configuration.validated(),
            let key = try? settings.apiKey(for: configuration.baseURL) {
             tuning = ArchiveAITuning.tuning(for: configuration)
-            planner = { [weak self] context in
-                try await ArchiveAIClient().plan(context: context, preference: ArchiveAIPrompt.defaultPreference,
-                                                 configuration: configuration, apiKey: key) { received in
-                    // Chunks arrive far faster than the eye can follow; publish roughly 20 characters at a time.
-                    guard let current = self?.progress?.receivedCharacters, received - current >= 20 else { return }
-                    self?.progress?.receivedCharacters = received
-                }
+            planner = .ai(configuration: configuration, apiKey: key) { [weak self] received in
+                // Chunks arrive far faster than the eye can follow; publish roughly 20 characters at a time.
+                guard let current = self?.progress?.receivedCharacters, received < current || received - current >= 20 else { return }
+                self?.progress?.receivedCharacters = received
             }
         } else {
-            planner = { ArchiveLocalPlanner.plan($0) }
+            planner = .local
         }
         progress = ArchiveRunProgress()
         runStartedAt = Date()
@@ -212,8 +209,11 @@ final class ArchiveViewModel: ObservableObject {
         switch progress.phase {
         case .scanning: progress.round == 0 ? "正在查看文件…" : "正在重新扫描文件夹…"
         case .waitingForStableFiles: "等待 \(progress.remainingFiles) 个新文件写入完成…"
-        case .planning: "正在规划 \(progress.batchFiles) 个文件的归类…"
-        case .applying: "正在整理 \(progress.batchFiles) 个文件…"
+        case .consolidating: "正在合并含义相同的文件夹…"
+        case .reviewing: "正在查看「\(progress.directory)」…"
+        case .grouping: "正在为「\(progress.directory)」中的 \(progress.batchFiles) 个文件归类…"
+        case .nesting: "正在梳理「\(progress.directory)」的文件夹层级…"
+        case .applying: "正在应用更改…"
         }
     }
 
@@ -223,7 +223,7 @@ final class ArchiveViewModel: ObservableObject {
         var parts: [String] = []
         if progress.round > 0 { parts.append("第 \(progress.round) 轮") }
         if progress.totalFiles > 0 { parts.append("已处理 \(progress.processedFiles)/\(progress.totalFiles) 个文件") }
-        if progress.phase == .planning, usesAI {
+        if [.consolidating, .reviewing, .grouping, .nesting].contains(progress.phase), usesAI {
             parts.append(progress.receivedCharacters > 0 ? "模型已回复 \(progress.receivedCharacters) 字" : "等待模型回复")
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
@@ -285,8 +285,9 @@ final class ArchiveViewModel: ObservableObject {
         do {
             for operation in plan.files.reversed() where operation.status == .complete {
                 try await service.undo(operation.id)
-                // A file the user moved back must stay where they put it.
+                // A file the user moved back must stay where they put it, with its result still recorded.
                 try await service.markSettled([operation.source.path: operation.fingerprint], removing: [operation.destination.path])
+                try await service.moveRecords(from: operation.destination.path, to: operation.source.path)
             }
             for operation in plan.directories.reversed() where operation.status == .complete {
                 try await service.undoAIDirectory(planID: plan.id, operationID: operation.id)

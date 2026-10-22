@@ -18,55 +18,81 @@ extension ArchiveService {
         return try withAccess(state.configuration) { config in
             try ArchiveFileSystem.validateConfiguration(config, stateDirectory: persistence.directory)
             let (directories, directoryWarnings) = try ArchiveDirectoryFileSystem.inventory(config)
-            let inboxScan = try ArchiveFileSystem.scan(config, role: .inbox)
-            let libraryScan = includeLibraryFiles ? try ArchiveFileSystem.scan(config, role: .library) : ArchiveScanResult()
+            // Metadata only: an unchanged file is recognized without reading it. Content is hashed below only
+            // for the files this round actually processes.
+            let inboxScan = try ArchiveFileSystem.scan(config, role: .inbox, hashing: false)
+            let libraryScan = includeLibraryFiles ? try ArchiveFileSystem.scan(config, role: .library, hashing: false) : ArchiveScanResult()
             // Interleave the two sources so a large inbox cannot hide the library from a bounded plan.
             var candidates: [ArchiveEvidence] = []
             for index in 0..<max(inboxScan.files.count, libraryScan.files.count) {
                 if index < inboxScan.files.count { candidates.append(inboxScan.files[index]) }
                 if index < libraryScan.files.count { candidates.append(libraryScan.files[index]) }
             }
+            let structure = ArchiveDirectoryFileSystem.signature(directories)
             var next = state
             var files: [ArchiveAIFile] = []
             var unsettled = 0
             var pending = 0
             var warnings = directoryWarnings + inboxScan.warnings + libraryScan.warnings
-            if candidates.count > batchLimit { warnings.append("扫描范围包含 \(candidates.count) 个可读文件，本轮最多提供 \(batchLimit) 个；方案仅针对本轮文件，不代表全库最优。") }
             let scanned = Set(candidates.map { $0.url.path })
+            // A record whose file vanished from its path may belong to a file that was moved while the app was
+            // closed (or just before a crash); the same inode, size and modification time identify it at its new path.
+            var orphaned: [String: String] = [:]
+            for (path, record) in next.files ?? [:] where !scanned.contains(path) {
+                orphaned[record.fingerprint.identityKey] = path
+            }
             for file in candidates {
                 try Task.checkCancellation()
+                let path = file.url.path
+                if next.files?[path] == nil, let old = orphaned.removeValue(forKey: file.fingerprint.identityKey) {
+                    Self.rekey(&next, from: old, to: path)
+                }
+                // Unchanged and settled: skipped without reading the file. Unresolved files come back once the
+                // folder layout or the workspace changed, since a place may now exist for them.
+                if let record = next.files?[path], record.fingerprint.sameMetadata(file.fingerprint),
+                   !record.needsReview(structure: structure) { continue }
                 if next.operations.contains(where: { $0.source == file.url && [.planned, .undoPlanned, .needsReview].contains($0.status) }) { continue }
-                let observed = next.observations[file.url.path]
-                if next.settled?[file.url.path] == file.fingerprint { continue }
-                if observed?.fingerprint != file.fingerprint {
-                    next.observations[file.url.path] = ArchiveObservation(fingerprint: file.fingerprint, firstSeen: now)
+                let observed = next.observations[path]
+                if observed.map({ !$0.fingerprint.sameMetadata(file.fingerprint) }) ?? true {
+                    next.observations[path] = ArchiveObservation(fingerprint: file.fingerprint, firstSeen: now)
                     if config.stableSeconds > 0 { unsettled += 1; continue }
                 } else if let observed, now.timeIntervalSince(observed.firstSeen) < config.stableSeconds { unsettled += 1; continue }
                 guard let root = config.folders.first(where: { $0.role != .excluded && ArchiveFileSystem.contains(file.url, in: $0.url) }) else { continue }
                 // Avoid re-offering explicitly ignored local suggestions unless the file changed.
-                if next.suggestions.contains(where: { $0.source == file.url && $0.fingerprint == file.fingerprint && $0.status == .skipped }) { continue }
+                if next.suggestions.contains(where: { $0.source == file.url && $0.fingerprint.sameMetadata(file.fingerprint) && $0.status == .skipped }) { continue }
                 guard files.count < batchLimit else {
                     // Count the rest so the caller can show how much of the folder is still ahead.
                     pending += 1
-                    if pending == 1 { warnings.append("最多提供 \(batchLimit) 个稳定文件，请完成本轮后重新扫描。") }
                     continue
                 }
+                let fingerprint: ArchiveFingerprint
                 do {
-                    // Keyword extraction (PDF, Word, text parsing) is the slow part of a scan; an unchanged file reuses its last result.
-                    let evidence: ArchiveEvidence
-                    if let cached = next.cache[file.url.path], cached.fingerprint == file.fingerprint {
-                        evidence = cached
+                    // An unchanged file keeps its recorded hash; anything else is hashed once here.
+                    if let known = next.files?[path]?.fingerprint, known.sameMetadata(file.fingerprint), !known.sha256.isEmpty {
+                        fingerprint = known
                     } else {
-                        evidence = try ArchiveLearning.extract(file, maxBytes: config.maxFileBytes)
-                        next.cache[file.url.path] = evidence
+                        fingerprint = try ArchiveFileSystem.fingerprint(file.url)
                     }
-                    files.append(ArchiveAIFile(id: UUID().uuidString, rootID: root.id.uuidString,
-                                               relativePath: ArchiveDirectoryFileSystem.relativePath(file.url, root: root.url),
-                                               source: file.url, fingerprint: file.fingerprint,
-                                               keywords: Array(evidence.words.prefix(max(0, keywordLimit)))))
-                    if let note = evidence.extractionNote { warnings.append("\(file.url.lastPathComponent)：\(note)") }
-                } catch { warnings.append("跳过 \(file.url.lastPathComponent)：\(error.localizedDescription)") }
+                } catch {
+                    if warnings.count < 40 { warnings.append("跳过 \(file.url.lastPathComponent)：\(error.localizedDescription)") }
+                    continue
+                }
+                // Keyword extraction (PDF, Word, text parsing) is slow; an unchanged file reuses its last result.
+                // A file that cannot be read for keywords (too large, unsupported) is still reviewed by its name.
+                var words: [String] = []
+                if let cached = next.cache[path], cached.fingerprint == fingerprint {
+                    words = cached.words
+                } else if let evidence = try? ArchiveLearning.extract(ArchiveEvidence(url: file.url, fingerprint: fingerprint, words: [], extractionNote: nil),
+                                                                       maxBytes: config.maxFileBytes) {
+                    words = evidence.words
+                    next.cache[path] = evidence
+                }
+                files.append(ArchiveAIFile(id: UUID().uuidString, rootID: root.id.uuidString,
+                                           relativePath: ArchiveDirectoryFileSystem.relativePath(file.url, root: root.url),
+                                           source: file.url, fingerprint: fingerprint,
+                                           keywords: Array(words.prefix(max(0, keywordLimit)))))
             }
+            if pending > 0 { warnings.append("还有 \(pending) 个文件在之后的轮次处理。") }
             if files.isEmpty { warnings.append("没有稳定的待归档文件；新文件需至少 2 秒后重新扫描。仍可规划现有空目录清理。") }
             // Forget everything known about files that are gone from a scanned root, so the journal does not grow
             // with the folder's history. Paths outside the scanned roots (a library that was not scanned this
@@ -76,22 +102,24 @@ extension ArchiveService {
                 func isGone(_ path: String) -> Bool {
                     !scanned.contains(path) && scannedRoots.contains { path == $0.path || path.hasPrefix($0.path + "/") }
                 }
-                // Cached keywords are only useful until the file has been reviewed; settled files drop theirs.
-                next.cache = next.cache.filter { !isGone($0.key) && next.settled?[$0.key] == nil }
+                // Cached keywords are only useful until the file has been reviewed and settled.
+                next.cache = next.cache.filter { !isGone($0.key) && next.files?[$0.key]?.isResolved != true }
                 next.observations = next.observations.filter { !isGone($0.key) }
                 next.settled = next.settled?.filter { !isGone($0.key) }
+                next.files = next.files?.filter { !isGone($0.key) }
             }
             try commit(next)
             let context = ArchiveAIContext(version: state.version, createdAt: now, folders: config.folders,
                                            directories: directories, files: files, warnings: warnings,
-                                           unsettledCount: unsettled, pendingCount: pending)
+                                           unsettledCount: unsettled, pendingCount: pending, structure: structure)
             aiContext = context
             aiPreview = nil
             return context
         }
     }
 
-    /// Records reviewed files so unchanged ones are not offered to the model again.
+    /// Legacy bookkeeping from before per-file records; kept so older journals still load. It no longer
+    /// decides which files are skipped — `files` records do.
     func markSettled(_ entries: [String: ArchiveFingerprint], removing paths: [String] = []) throws {
         var next = state
         var settled = next.settled ?? [:]
@@ -104,14 +132,16 @@ extension ArchiveService {
     func clearSettled() throws {
         var next = state
         next.settled = nil
+        next.files = nil
         try commit(next)
     }
 
-    func previewAI(_ response: ArchiveAIResponse, contextID: UUID) throws -> ArchiveAIPlan {
+    func previewAI(_ response: ArchiveAIResponse, contextID: UUID, records: [String: ArchiveFileRecord]? = nil) throws -> ArchiveAIPlan {
         guard let context = aiContext, context.id == contextID else { throw ArchiveError("AI 扫描快照已变化，请重新扫描。") }
-        let plan = try withAccess(state.configuration) { config in
+        var plan = try withAccess(state.configuration) { config in
             try makeAIPlan(response, context: context, config: config)
         }
+        plan.records = records
         aiPreview = plan
         return plan
     }
@@ -139,6 +169,17 @@ extension ArchiveService {
                     running.directories[index].resultingIdentity = try ArchiveDirectoryFileSystem.create(operation.target)
                     running.directories[index].status = .complete
                     try saveAIProgress(running)
+                }
+                for index in running.directories.indices where running.directories[index].action == .move {
+                    let operation = running.directories[index]
+                    guard let source = operation.source, let identity = operation.originalIdentity else { throw ArchiveError("移动目录缺少原始记录。") }
+                    try validateDirectoryPermission(operation, config: config)
+                    try verifyAIParent(source.deletingLastPathComponent(), context: context, running: running, config: config)
+                    try verifyAIParent(operation.target.deletingLastPathComponent(), context: context, running: running, config: config)
+                    running.directories[index].resultingIdentity = try ArchiveDirectoryFileSystem.move(source, to: operation.target, expected: identity)
+                    running.directories[index].status = .complete
+                    // The records for everything inside move with the folder in the same commit.
+                    try saveAIProgress(running, rekey: (source.path, operation.target.path))
                 }
                 for index in running.files.indices {
                     let operation = running.files[index]
@@ -189,8 +230,14 @@ extension ArchiveService {
             var updated = plan
             let operation = plan.directories[index]
             guard let root = config.folders.first(where: { $0.id.uuidString == operation.rootID }) else { throw ArchiveError("目录授权已移除。") }
-            try ArchiveDirectoryFileSystem.checkScope(operation.target, root: root, configuration: config, deleting: operation.action == .create)
-            if operation.action == .create {
+            try ArchiveDirectoryFileSystem.checkScope(operation.target, root: root, configuration: config, deleting: operation.action != .removeEmpty)
+            if operation.action == .move {
+                guard root.directoryPermission?.canCreate == true, let source = operation.source,
+                      let identity = operation.resultingIdentity else { throw ArchiveError("撤销移动需要“新建子目录”权限及目录身份记录。") }
+                try ArchiveDirectoryFileSystem.checkScope(source, root: root, configuration: config)
+                guard try ArchiveDirectoryFileSystem.identity(operation.target) == identity else { throw ArchiveError("目录身份或权限已变化，请人工核对：\(operation.target.path)") }
+                guard !ArchiveFileSystem.exists(source) else { throw ArchiveError("原位置已被占用，无法移回：\(source.path)") }
+            } else if operation.action == .create {
                 guard root.directoryPermission?.canRemoveEmpty == true, let identity = operation.resultingIdentity else {
                     throw ArchiveError("撤销新建需要此目录的“删除空目录”权限及原始目录身份。")
                 }
@@ -201,8 +248,12 @@ extension ArchiveService {
             }
             updated.directories[index].status = .undoPlanned
             try saveAIProgress(updated, synchronizeFiles: false)
+            var rekey: (String, String)?
             do {
-                if operation.action == .create {
+                if operation.action == .move, let source = operation.source {
+                    _ = try ArchiveDirectoryFileSystem.move(operation.target, to: source, expected: operation.resultingIdentity!)
+                    rekey = (operation.target.path, source.path)
+                } else if operation.action == .create {
                     try ArchiveDirectoryFileSystem.removeEmpty(operation.target, expected: operation.resultingIdentity!)
                 } else {
                     _ = try ArchiveDirectoryFileSystem.create(operation.target, permissions: operation.originalIdentity?.permissions ?? 0o755)
@@ -215,7 +266,7 @@ extension ArchiveService {
                 try saveAIProgress(updated, invalidateLearning: true, synchronizeFiles: false)
                 throw error
             }
-            try saveAIProgress(updated, invalidateLearning: true, synchronizeFiles: false)
+            try saveAIProgress(updated, invalidateLearning: true, synchronizeFiles: false, rekey: rekey)
         }
     }
 
@@ -247,15 +298,40 @@ extension ArchiveService {
             guard !directories.contains(where: { ArchiveFileSystem.nameKey($0.target.path) == ArchiveFileSystem.nameKey(target.path) }),
                   !request.reason.isEmpty, request.reason.count <= 1_000 else { throw ArchiveError("AI 方案包含重复目录或无效说明。") }
             let existing = context.directories.first { $0.rootID == request.rootID && $0.relativePath == request.relativePath }
-            if request.action == .removeEmpty {
+            var source: URL?
+            var identity = existing?.identity
+            switch request.action {
+            case .removeEmpty:
                 guard let existing, existing.isEmpty else { throw ArchiveError("AI 只能删除扫描时已经为空的目录。") }
-            } else if existing != nil { throw ArchiveError("AI 试图新建已有目录。") }
+            case .create:
+                guard existing == nil else { throw ArchiveError("AI 试图新建已有目录。") }
+            case .move:
+                guard existing == nil, let sourcePath = request.source,
+                      let original = context.directories.first(where: { $0.rootID == request.rootID && $0.relativePath == sourcePath }) else {
+                    throw ArchiveError("只能移动扫描快照中的目录，且目标不能已存在。")
+                }
+                let (_, from) = try ArchiveDirectoryFileSystem.target(rootID: request.rootID, relativePath: sourcePath, configuration: config)
+                guard !ArchiveFileSystem.contains(target, in: from),
+                      !directories.contains(where: { other in
+                          other.source.map { ArchiveFileSystem.contains(from, in: $0) || ArchiveFileSystem.contains($0, in: from) } ?? false
+                      }) else { throw ArchiveError("同一方案中的目录移动互相嵌套。") }
+                // The whole subtree moves, so its deepest folder must still fit under the depth limit.
+                let depth = { (path: String) in path.split(separator: "/").count }
+                let subtree = context.directories.filter { $0.rootID == request.rootID && $0.relativePath.hasPrefix(sourcePath + "/") }
+                    .map { depth($0.relativePath) - depth(sourcePath) }.max() ?? 0
+                guard depth(request.relativePath) + subtree <= 6 else { throw ArchiveError("移动后目录层级超过六层。") }
+                source = from
+                identity = original.identity
+            }
             directories.append(ArchiveDirectoryOperation(action: request.action, rootID: request.rootID, target: target,
-                                                         reason: request.reason, originalIdentity: existing?.identity))
+                                                         reason: request.reason, originalIdentity: identity, source: source))
         }
         directories.sort {
-            if $0.action != $1.action { return $0.action == .create }
+            if $0.action != $1.action { return $0.action.order < $1.action.order }
             return $0.target.pathComponents.count < $1.target.pathComponents.count
+        }
+        guard response.files.isEmpty || !directories.contains(where: { $0.action == .move }) else {
+            throw ArchiveError("目录移动与文件移动需分开规划。")
         }
         var files: [ArchiveOperation] = []
         for request in response.files {
@@ -291,17 +367,32 @@ extension ArchiveService {
         let unresolved = (state.ai?.plans ?? []).flatMap(\.directories).filter {
             [.planned, .undoPlanned, .needsReview].contains($0.status)
         }
-        let affected = plan.directories.map(\.target) + plan.files.flatMap { [$0.source, $0.destination] }
+        let affected = plan.directories.map(\.target) + plan.directories.compactMap(\.source) + plan.files.flatMap { [$0.source, $0.destination] }
         guard !unresolved.contains(where: { previous in
             affected.contains { ArchiveFileSystem.contains($0, in: previous.target) || ArchiveFileSystem.contains(previous.target, in: $0) }
         }) else { throw ArchiveError("此目录存在未确认的历史操作，请先人工核对并使用其他分类位置。") }
         let creates = plan.directories.filter { $0.action == .create }
         let removals = plan.directories.filter { $0.action == .removeEmpty }
+        let moves = plan.directories.filter { $0.action == .move }
         for operation in plan.directories {
             try validateDirectoryPermission(operation, config: config)
-            if operation.action == .create {
-                guard plan.files.contains(where: { ArchiveFileSystem.contains($0.destination, in: operation.target) }) else {
-                    throw ArchiveError("新建分类目录必须承接本次归档文件。")
+            if operation.action == .move {
+                guard let source = operation.source, let identity = operation.originalIdentity,
+                      try ArchiveDirectoryFileSystem.identity(source) == identity else { throw ArchiveError("待移动目录已变化，请重新规划。") }
+                guard !ArchiveFileSystem.exists(operation.target) else { throw ArchiveError("目录移动目标已被占用。") }
+                try verifyAIParent(source.deletingLastPathComponent(), context: context, running: nil, config: config)
+                let parent = operation.target.deletingLastPathComponent()
+                if !creates.contains(where: { $0.target == parent }) {
+                    try verifyAIParent(parent, context: context, running: nil, config: config)
+                    try ArchiveFileSystem.checkCollision(operation.target, ignoring: source)
+                }
+                guard !removals.contains(where: { ArchiveFileSystem.contains(source, in: $0.target) || ArchiveFileSystem.contains(parent, in: $0.target) }) else {
+                    throw ArchiveError("不能删除本方案仍在使用的目录。")
+                }
+            } else if operation.action == .create {
+                guard plan.files.contains(where: { ArchiveFileSystem.contains($0.destination, in: operation.target) })
+                        || moves.contains(where: { ArchiveFileSystem.contains($0.target, in: operation.target) }) else {
+                    throw ArchiveError("新建分类目录必须承接本次归档的文件或目录。")
                 }
                 guard !ArchiveFileSystem.exists(operation.target) else { throw ArchiveError("新建目标已被占用。") }
                 let parent = operation.target.deletingLastPathComponent()
@@ -350,9 +441,11 @@ extension ArchiveService {
         guard let root = config.folders.first(where: { $0.id.uuidString == operation.rootID }), root.role != .excluded else {
             throw ArchiveError("目录授权已移除。")
         }
-        let permitted = operation.action == .create ? root.directoryPermission?.canCreate : root.directoryPermission?.canRemoveEmpty
+        let permitted = operation.action == .removeEmpty ? root.directoryPermission?.canRemoveEmpty : root.directoryPermission?.canCreate
         guard permitted == true else { throw ArchiveError("没有“\(operation.action.title)”权限：\(root.url.path)") }
         try ArchiveDirectoryFileSystem.checkScope(operation.target, root: root, configuration: config, deleting: operation.action == .removeEmpty)
+        // Moving a folder away is as strong as removing it: never a root, an exclusion or anything containing one.
+        if let source = operation.source { try ArchiveDirectoryFileSystem.checkScope(source, root: root, configuration: config, deleting: true) }
     }
 
     private func verifyAIParent(_ url: URL, context: ArchiveAIContext, running: ArchiveAIPlan?, config: ArchiveConfiguration) throws {
@@ -370,15 +463,25 @@ extension ArchiveService {
         }
     }
 
-    private func saveAIProgress(_ plan: ArchiveAIPlan, invalidateLearning: Bool = false, synchronizeFiles: Bool = true) throws {
+    private func saveAIProgress(_ plan: ArchiveAIPlan, invalidateLearning: Bool = false, synchronizeFiles: Bool = true,
+                                rekey: (String, String)? = nil) throws {
         var next = state
         guard let index = next.ai?.plans.firstIndex(where: { $0.id == plan.id }) else { throw ArchiveError("AI 操作记录不存在。") }
         next.ai!.plans[index] = plan
         if synchronizeFiles {
             for operation in plan.files {
                 if let fileIndex = next.operations.firstIndex(where: { $0.id == operation.id }) { next.operations[fileIndex] = operation }
+                // A file's result is saved in the same commit that confirms its move, so the two never disagree.
+                if operation.status == .complete, var record = plan.records?[operation.source.path] {
+                    record.path = operation.destination.path
+                    var files = next.files ?? [:]
+                    files.removeValue(forKey: operation.source.path)
+                    files[record.path] = record
+                    next.files = files
+                }
             }
         }
+        if let (from, to) = rekey { Self.rekey(&next, from: from, to: to) }
         if invalidateLearning { invalidateAIAndSuggestions(&next); next.rules = []; next.report = nil; next.cache = [:] }
         try commit(next)
     }

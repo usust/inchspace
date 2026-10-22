@@ -26,7 +26,8 @@ nonisolated final class ArchivePersistence: @unchecked Sendable {
         static let cache = "cache"
         static let plans = "plans"
         static let settled = "settled"
-        static let all = [rules, suggestions, operations, observations, cache, plans, settled]
+        static let files = "files"
+        static let all = [rules, suggestions, operations, observations, cache, plans, settled, files]
     }
 
     private enum Meta {
@@ -35,6 +36,8 @@ nonisolated final class ArchivePersistence: @unchecked Sendable {
         static let report = "report"
         static let aiPresent = "ai.present"
         static let settledPresent = "settled.present"
+        static let filesPresent = "files.present"
+        static let consolidatedStructure = "consolidated.structure"
     }
 
     static let databaseName = "archive.sqlite"
@@ -93,6 +96,7 @@ nonisolated final class ArchivePersistence: @unchecked Sendable {
             if let data = meta[Meta.configuration] { state.configuration = try decoder.decode(ArchiveConfiguration.self, from: data) }
             if let data = meta[Meta.version] { state.version = try decoder.decode(Int.self, from: data) }
             if let data = meta[Meta.report] { state.report = try decoder.decode(ArchiveLearningReport.self, from: data) }
+            if let data = meta[Meta.consolidatedStructure] { state.consolidatedStructure = try decoder.decode(String.self, from: data) }
             state.rules = try ordered(Collection.rules).map { try decoder.decode(ArchiveRule.self, from: $0) }
             state.suggestions = try ordered(Collection.suggestions).map { try decoder.decode(ArchiveSuggestion.self, from: $0) }
             state.operations = try ordered(Collection.operations).map { try decoder.decode(ArchiveOperation.self, from: $0) }
@@ -103,6 +107,9 @@ nonisolated final class ArchivePersistence: @unchecked Sendable {
             }
             if meta[Meta.settledPresent] != nil {
                 state.settled = try (rows[Collection.settled] ?? [:]).mapValues { try decoder.decode(ArchiveFingerprint.self, from: $0.data) }
+            }
+            if meta[Meta.filesPresent] != nil {
+                state.files = try (rows[Collection.files] ?? [:]).mapValues { try decoder.decode(ArchiveFileRecord.self, from: $0.data) }
             }
         } catch {
             throw ArchiveError("归档记录无法解析，请检查 \(directory.appendingPathComponent(Self.databaseName).path)。原文件已保留。")
@@ -118,8 +125,10 @@ nonisolated final class ArchivePersistence: @unchecked Sendable {
             Meta.version: try encoder.encode(state.version),
         ]
         if let report = state.report { nextMeta[Meta.report] = try encoder.encode(report) }
+        if let structure = state.consolidatedStructure { nextMeta[Meta.consolidatedStructure] = try encoder.encode(structure) }
         if state.ai != nil { nextMeta[Meta.aiPresent] = Data([1]) }
         if state.settled != nil { nextMeta[Meta.settledPresent] = Data([1]) }
+        if state.files != nil { nextMeta[Meta.filesPresent] = Data([1]) }
 
         var nextRows: [String: [String: Row]] = [:]
         nextRows[Collection.rules] = try indexed(state.rules, key: { $0.directory.path }, encoder: encoder)
@@ -129,6 +138,7 @@ nonisolated final class ArchivePersistence: @unchecked Sendable {
         nextRows[Collection.observations] = try state.observations.mapValues { Row(position: 0, data: try encoder.encode($0)) }
         nextRows[Collection.cache] = try state.cache.mapValues { Row(position: 0, data: try encoder.encode($0)) }
         nextRows[Collection.settled] = try (state.settled ?? [:]).mapValues { Row(position: 0, data: try encoder.encode($0)) }
+        nextRows[Collection.files] = try (state.files ?? [:]).mapValues { Row(position: 0, data: try encoder.encode($0)) }
 
         try transaction {
             for (key, data) in nextMeta where meta[key] != data { try upsertMeta(key, data) }

@@ -40,6 +40,15 @@ nonisolated struct ArchiveFingerprint: Codable, Equatable, Sendable {
     var modifiedSeconds: Int64
     var modifiedNanoseconds: Int64
     var sha256: String
+
+    /// Same file, same size, same modification time: treated as unchanged without reading the content.
+    func sameMetadata(_ other: ArchiveFingerprint) -> Bool {
+        device == other.device && inode == other.inode && size == other.size &&
+            modifiedSeconds == other.modifiedSeconds && modifiedNanoseconds == other.modifiedNanoseconds
+    }
+
+    /// Survives renames and moves on the same volume; used to find a record again after the file moved.
+    var identityKey: String { "\(device):\(inode):\(size):\(modifiedSeconds).\(modifiedNanoseconds)" }
 }
 
 nonisolated struct ArchiveEvidence: Codable, Equatable, Sendable {
@@ -140,6 +149,53 @@ nonisolated struct ArchiveLearningReport: Codable, Sendable {
     var learnedAt = Date()
 }
 
+nonisolated enum ArchiveFileStage: String, Codable, Sendable {
+    /// The file was reviewed on its own; it still waits to be grouped with related files.
+    case named
+    /// Grouping is done for this file.
+    case grouped
+}
+
+/// Where a reviewed file stands. Only `organized` files are left alone for good while unchanged.
+nonisolated enum ArchiveFileResolution: String, Codable, Sendable {
+    /// In a folder where it belongs.
+    case organized
+    /// Reviewed, but no clear destination yet (loose in the workspace, or not fitting its folder).
+    case unplaced
+    /// The review itself failed; nothing was decided.
+    case unrecognized
+}
+
+/// What autopilot decided about one file. Saved as soon as the decision is final, so an interrupted run
+/// resumes where it stopped and an unchanged file is never sent to the model twice.
+nonisolated struct ArchiveFileRecord: Codable, Equatable, Sendable {
+    var path: String
+    var fingerprint: ArchiveFingerprint
+    var originalName: String
+    /// A few words on what the file is about, used to group it with related files.
+    var topic: String
+    var renamed: Bool
+    var reason: String
+    var stage: ArchiveFileStage
+    var processedAt = Date()
+    /// Nil in records from before resolutions existed; those count as organized.
+    var resolution: ArchiveFileResolution?
+    /// The folder layout an unresolved file was last reviewed against. When the layout or the workspace
+    /// changes, the file is reviewed again even though it did not change itself.
+    var structure: String?
+    /// A better name the model suggested but that could not be applied (unsafe or taken); kept for review.
+    var suggestedName: String?
+    /// Reviewed as not belonging to the folder it is in; it joins the loose files when grouping.
+    var misplaced: Bool?
+
+    var isResolved: Bool { (resolution ?? .organized) == .organized }
+
+    /// Whether a run should look at this unchanged file again.
+    func needsReview(structure current: String) -> Bool {
+        !isResolved && structure != current
+    }
+}
+
 nonisolated struct ArchiveState: Codable, Sendable {
     var configuration = ArchiveConfiguration()
     var version = 0
@@ -152,6 +208,10 @@ nonisolated struct ArchiveState: Codable, Sendable {
     var ai: ArchiveAIState?
     /// Files already reviewed by autopilot, keyed by path; a changed fingerprint makes a file eligible again.
     var settled: [String: ArchiveFingerprint]?
+    /// Per-file results keyed by current path. A record whose fingerprint still matches is not reprocessed.
+    var files: [String: ArchiveFileRecord]?
+    /// The folder layout equivalent folders were last merged in; consolidation runs again only after it changes.
+    var consolidatedStructure: String?
 }
 
 nonisolated struct ArchiveScanResult: Sendable {

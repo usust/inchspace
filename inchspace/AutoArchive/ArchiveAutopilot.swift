@@ -110,6 +110,8 @@ struct ArchiveAutopilot {
     var keywordLimit = 80
     /// Other files of the same folder shown per file.
     var siblingLimit = 20
+    /// Similar folders from anywhere in the workspace offered per file (`ArchiveFolderCatalog`).
+    var candidateLimit = 8
     /// Files of one folder shown to the planner at once when grouping.
     var groupingLimit = 60
     /// Folder levels one run may add inside a single folder.
@@ -131,7 +133,7 @@ struct ArchiveAutopilot {
         let consolidated: Bool
         do {
             consolidated = try await consolidateFolders(&summary, &status, progress)
-            try await reviewFiles(&summary, &status, progress)
+            try await reviewFiles(since: start, &summary, &status, progress)
             // Grouping waits until every new file has been reviewed, so related files are seen together.
             if !summary.hasMore {
                 let changed = try await groupFiles(&summary, &status, progress)
@@ -301,7 +303,8 @@ struct ArchiveAutopilot {
 
     // MARK: Step 1 – files in small batches, applied one at a time
 
-    private func reviewFiles(_ summary: inout ArchiveRunSummary, _ status: inout ArchiveRunProgress, _ progress: Progress) async throws {
+    private func reviewFiles(since start: Date, _ summary: inout ArchiveRunSummary, _ status: inout ArchiveRunProgress,
+                             _ progress: Progress) async throws {
         var waits = 0
         var round = 0
         while true {
@@ -312,7 +315,7 @@ struct ArchiveAutopilot {
             status.receivedCharacters = 0
             progress(status)
             // Files whose record still matches their fingerprint are not offered again.
-            let context = try await service.prepareAIContext(limit: batchSize, keywordLimit: keywordLimit)
+            let context = try await service.prepareAIContext(limit: batchSize, keywordLimit: keywordLimit, reviewedSince: start)
             status.remainingFiles = context.files.count + context.pendingCount
             if context.files.isEmpty {
                 // Newly seen files must hold still for a moment before they are touched.
@@ -347,13 +350,20 @@ struct ArchiveAutopilot {
                 }
             }
             let step = max(1, reviewBatch)
+            // Read once per round: every folder with what it holds, so each file is compared with the whole tree.
+            var catalog = ArchiveFolderCatalog(folders: [])
+            if !reviewed.isEmpty {
+                let records = await service.snapshot().files ?? [:]
+                catalog = ArchiveFolderCatalog.build(root: root.url, folders: folders, records: records)
+            }
             for start in stride(from: 0, to: reviewed.count, by: step) {
                 let chunk = Array(reviewed[start..<min(start + step, reviewed.count)])
                 // One question for the whole chunk; the answers are then checked and applied file by file,
                 // each against a fresh snapshot, so a move never relies on stale folder knowledge.
                 let reviews = chunk.map { file in
                     ArchiveFileReview(file: file, folder: (file.relativePath as NSString).deletingLastPathComponent, folders: folders,
-                                      siblings: Self.siblings(of: file.source, limit: siblingLimit))
+                                      siblings: Self.siblings(of: file.source, limit: siblingLimit),
+                                      candidates: catalog.candidates(for: file, limit: candidateLimit))
                 }
                 report(chunk.map { ArchiveFileActivity(path: $0.source.path, status: .processing, detail: "正在判断位置、名称和内容") })
                 status.phase = .reviewing
@@ -362,8 +372,14 @@ struct ArchiveAutopilot {
                 status.receivedCharacters = 0
                 progress(status)
                 let decisions: [String: ArchiveFileDecision]
+                var lastError: String?
                 do {
-                    decisions = try await decide(reviews, folders: folders)
+                    decisions = try await decide(reviews, folders: folders, lastError: &lastError)
+                    // Not one file of several got an answer, even one at a time: the model is not working (it only
+                    // thinks, or its answers are cut off). Stop here instead of placing a whole batch by guesswork.
+                    if chunk.count > 1, decisions.isEmpty {
+                        throw ArchiveNeedsReview("模型连续没有给出可用的结果（\(lastError ?? "原因未知")），已停止整理，文件都没有改动。请在模型设置中换用更快或非推理的模型后重试。")
+                    }
                 } catch is CancellationError {
                     report(reviewed[start...].map { ArchiveFileActivity(path: $0.source.path, status: .queued, detail: "已停止，下次继续") })
                     throw CancellationError()
@@ -377,7 +393,7 @@ struct ArchiveAutopilot {
                 for (index, file) in chunk.enumerated() {
                     do {
                         try Task.checkCancellation()
-                        try await apply(decisions[file.id], to: file, &summary, &status, progress)
+                        try await apply(decisions[file.id], to: file, catalog: catalog, failure: lastError, &summary, &status, progress)
                     } catch is CancellationError {
                         report(chunk[index...].map { ArchiveFileActivity(path: $0.source.path, status: .queued, detail: "已停止，下次继续") })
                         report(reviewed[min(start + step, reviewed.count)...].map {
@@ -403,7 +419,9 @@ struct ArchiveAutopilot {
     /// Asks the model about a batch. An unavailable service gets one more try and then stops the run; an
     /// unusable answer splits the batch in half and asks again, down to single files, so one confusing file
     /// cannot sink the others. A single file with two unusable answers simply gets no decision.
-    private func decide(_ reviews: [ArchiveFileReview], folders: [String], attempt: Int = 1) async throws -> [String: ArchiveFileDecision] {
+    /// `lastError` keeps the most recent unusable answer, to say why when nothing came back.
+    private func decide(_ reviews: [ArchiveFileReview], folders: [String], attempt: Int = 1,
+                        lastError: inout String?) async throws -> [String: ArchiveFileDecision] {
         guard !reviews.isEmpty else { return [:] }
         try Task.checkCancellation()
         do {
@@ -412,18 +430,22 @@ struct ArchiveAutopilot {
             return answer
         } catch let error as ArchiveAIUnavailable {
             guard attempt < maxAttemptsPerRound else { throw error }
-            return try await decide(reviews, folders: folders, attempt: attempt + 1)
+            return try await decide(reviews, folders: folders, attempt: attempt + 1, lastError: &lastError)
         } catch where error is ArchiveError || error is DecodingError {
+            lastError = error.localizedDescription
             if reviews.count > 1 {
                 let half = reviews.count / 2
-                var merged = try await decide(Array(reviews[..<half]), folders: folders)
-                merged.merge(try await decide(Array(reviews[half...]), folders: folders)) { first, _ in first }
+                var merged = try await decide(Array(reviews[..<half]), folders: folders, lastError: &lastError)
+                merged.merge(try await decide(Array(reviews[half...]), folders: folders, lastError: &lastError)) { first, _ in first }
                 return merged
             }
             guard attempt < maxAttemptsPerRound else { return [:] }
-            return try await decide(reviews, folders: folders, attempt: attempt + 1)
+            return try await decide(reviews, folders: folders, attempt: attempt + 1, lastError: &lastError)
         }
     }
+
+    /// Where files nobody can identify are collected, in the workspace itself.
+    static let unsortedFolder = "待分类"
 
     private func rest() async throws {
         guard cooldown > .zero else { return }
@@ -431,8 +453,10 @@ struct ArchiveAutopilot {
     }
 
     /// Checks one decision against a fresh snapshot, applies the change, and records the result in the same commit.
-    private func apply(_ decision: ArchiveFileDecision?, to scanned: ArchiveAIFile, _ summary: inout ArchiveRunSummary,
-                       _ status: inout ArchiveRunProgress, _ progress: Progress) async throws {
+    /// A file the model cannot identify (or got no answer for) is still placed: kept in the subfolder the user put
+    /// it in, moved next to clearly similar files, or collected in `unsortedFolder` when it lies loose.
+    private func apply(_ decision: ArchiveFileDecision?, to scanned: ArchiveAIFile, catalog: ArchiveFolderCatalog, failure: String?,
+                       _ summary: inout ArchiveRunSummary, _ status: inout ArchiveRunProgress, _ progress: Progress) async throws {
         let path = scanned.source.path
         status.phase = .reviewing
         status.directory = scanned.source.lastPathComponent
@@ -448,8 +472,11 @@ struct ArchiveAutopilot {
         let folder = (file.relativePath as NSString).deletingLastPathComponent
         let folders = context.directories.filter { $0.rootID == file.rootID && !$0.relativePath.isEmpty }.map(\.relativePath).sorted()
 
+        let unknown = decision == nil || decision?.known == false
+        var topic = Self.clean(decision?.topic, limit: 24)
+        if topic.isEmpty { topic = Self.clean(scanned.metadata?["kind"], limit: 24) }
         var record = ArchiveFileRecord(path: path, fingerprint: file.fingerprint, originalName: original,
-                                       topic: Self.clean(decision?.topic, limit: 24), renamed: false,
+                                       topic: topic, renamed: false,
                                        reason: Self.clean(decision?.reason, limit: 300), stage: .named)
         record.summary = Self.clean(decision?.summary, limit: 120).isEmpty ? nil : Self.clean(decision?.summary, limit: 120)
         record.createdSeconds = ArchiveFileSystem.creationSeconds(file.source)
@@ -457,7 +484,7 @@ struct ArchiveAutopilot {
         var target = folder
         var notes: [String] = []
         if let decision {
-            if decision.proposedName != original {
+            if decision.proposedName != original, !unknown {
                 if let valid = try? ArchiveAINamePolicy.validate(decision.proposedName, original: file.source) { name = valid }
                 else { notes.append("建议的名称不安全，保留原名") }
                 record.suggestedName = Self.clean(decision.proposedName, limit: 240)
@@ -467,7 +494,20 @@ struct ArchiveAutopilot {
             if !wanted.isEmpty, wanted != folder,
                let existing = folders.first(where: { ArchiveFileSystem.nameKey($0) == ArchiveFileSystem.nameKey(wanted) }),
                existing != folder {
-                target = existing
+                if let confidence = decision.confidence, confidence < 0.4 {
+                    notes.append("模型建议移到「\(existing)」但把握不足，暂不移动")
+                } else {
+                    target = existing
+                }
+            }
+        }
+        if unknown, target == folder, folder.isEmpty || folder == Self.unsortedFolder {
+            if folder.isEmpty, let match = catalog.confidentMatch(for: scanned) {
+                target = match.path
+                notes.append("无法判断内容，按名称与「\(match.path)」中的已有文件相似归入")
+            } else if folder.isEmpty {
+                target = Self.unsortedFolder
+                notes.append("无法判断是什么文件，先放进「\(Self.unsortedFolder)」")
             }
         }
         func url(_ relative: String) -> URL { relative.isEmpty ? root.url : root.url.appendingPathComponent(relative, isDirectory: true) }
@@ -480,13 +520,17 @@ struct ArchiveAutopilot {
             notes.append("新名称已被占用，保留原名")
         }
         if name != original { record.suggestedName = nil }
-        if decision == nil { record.reason = "没有得到有效的结果，保留原名并留在原处" }
-        else if !notes.isEmpty { record.reason = notes.joined(separator: "；") }
+        if !notes.isEmpty { record.reason = notes.joined(separator: "；") }
+        else if decision == nil { record.reason = "模型没有给出结果（\(failure ?? "原因未知")），按所在文件夹保留" }
+        else if unknown, record.reason.isEmpty { record.reason = "无法判断内容，保留在所在文件夹" }
         let fits = decision?.belongsHere ?? !folder.isEmpty
         func settle(movedTo destination: String?) {
-            if decision == nil {
-                // Nothing was decided: retried when the folders change, never counted as organized.
-                record.resolution = .unrecognized
+            if unknown {
+                // Placed by rule, never left without a result. Files in the unsorted folder are looked at again
+                // whenever the folders change, since a place may turn up for them.
+                let final = destination ?? folder
+                record.resolution = final == Self.unsortedFolder || final.isEmpty ? .unplaced : .organized
+                record.misplaced = nil
                 record.stage = .grouped
             } else if destination != nil || (!folder.isEmpty && fits) {
                 record.resolution = .organized
@@ -501,13 +545,21 @@ struct ArchiveAutopilot {
             }
         }
         settle(movedTo: target != folder ? target : nil)
+        // Looked at again without being moved now: what an earlier run changed stays on record, so the browser
+        // still shows where the file came from and the earlier move can still be undone.
+        if target == folder, name == original, let earlier = await service.snapshot().files?[path] {
+            record.originalName = earlier.originalName
+            record.renamed = earlier.renamed
+            record.previousFolder = earlier.previousFolder
+            record.operationID = earlier.operationID
+        }
         // Checked against this layout: an unresolved file is not offered again until the folders change.
         record.structure = context.structure
 
         guard name != original || target != folder else {
             try await service.saveFileRecords([record])
             report([ArchiveFileActivity(path: path, status: Self.activity(for: record), detail: Self.describe(record), record: record)])
-            if decision == nil { summary.leftUntouched += 1 }
+            if unknown { summary.leftUntouched += 1 }
             return
         }
         record.renamed = name != original
@@ -516,9 +568,12 @@ struct ArchiveAutopilot {
         progress(status)
         let request = ArchiveAIFileRequest(fileID: file.id, rootID: file.rootID, relativeDirectory: target,
                                            reason: record.reason.isEmpty ? "位置或名称更合适" : record.reason, proposedName: name)
+        // The unsorted folder is the only one this step may create; everything else must already exist.
+        let creates = target != folder && !context.directories.contains { $0.rootID == file.rootID && $0.relativePath == target }
+            ? [ArchiveAIDirectoryRequest(action: .create, rootID: file.rootID, relativePath: target, reason: "存放暂时无法识别的文件")] : []
         let plan: ArchiveAIPlan
         do {
-            plan = try await service.previewAI(ArchiveAIResponse(summary: "整理「\(original)」", directories: [], files: [request]),
+            plan = try await service.previewAI(ArchiveAIResponse(summary: "整理「\(original)」", directories: creates, files: [request]),
                                                contextID: context.id, records: [path: record])
         } catch is ArchiveError {
             // The safety checks refused the change; record the file as it is instead.
@@ -538,6 +593,7 @@ struct ArchiveAutopilot {
         }
         if record.renamed { summary.renamedFiles += 1 }
         if target != folder { summary.movedFiles += 1 }
+        summary.createdDirectories += applied.directories.filter { $0.action == .create && $0.status == .complete }.count
         summary.batchIDs.append(applied.id)
         record.path = operation.destination.path
         record.operationID = operation.id

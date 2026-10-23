@@ -13,7 +13,10 @@ extension ArchiveService {
     }
 
     /// Inventory is a separate local step so users can inspect exactly what will be sent before requesting AI.
-    func prepareAIContext(now: Date = Date(), includeLibraryFiles: Bool = false, limit: Int = 30, keywordLimit: Int = 80) throws -> ArchiveAIContext {
+    /// `reviewedSince` is the start of the current run: a file it already reviewed is not offered again in the same
+    /// run, even when its own move or a new folder changed the layout it was checked against.
+    func prepareAIContext(now: Date = Date(), includeLibraryFiles: Bool = false, limit: Int = 30, keywordLimit: Int = 80,
+                          reviewedSince: Date? = nil) throws -> ArchiveAIContext {
         let batchLimit = max(1, min(limit, 30))
         return try withAccess(state.configuration) { config in
             try ArchiveFileSystem.validateConfiguration(config, stateDirectory: persistence.directory)
@@ -55,7 +58,7 @@ extension ArchiveService {
                 // Unchanged and settled: skipped without reading the file. Unresolved files come back once the
                 // folder layout or the workspace changed, since a place may now exist for them.
                 if let record = next.files?[path], record.fingerprint.sameMetadata(file.fingerprint),
-                   !record.needsReview(structure: structure) { continue }
+                   !record.needsReview(structure: structure) || reviewedSince.map({ record.processedAt >= $0 }) == true { continue }
                 if next.operations.contains(where: { $0.source == file.url && [.planned, .undoPlanned, .needsReview].contains($0.status) }) { continue }
                 let observed = next.observations[path]
                 if observed.map({ !$0.fingerprint.sameMetadata(file.fingerprint) }) ?? true {
@@ -95,7 +98,8 @@ extension ArchiveService {
                 files.append(ArchiveAIFile(id: UUID().uuidString, rootID: root.id.uuidString,
                                            relativePath: ArchiveDirectoryFileSystem.relativePath(file.url, root: root.url),
                                            source: file.url, fingerprint: fingerprint,
-                                           keywords: Array(words.prefix(max(0, keywordLimit)))))
+                                           keywords: Array(words.prefix(max(0, keywordLimit))),
+                                           metadata: ArchiveFileMetadata.describe(file.url, fingerprint: fingerprint)))
             }
             if pending > 0 { warnings.append("还有 \(pending) 个文件在之后的轮次处理。") }
             if files.isEmpty { warnings.append("没有稳定的待归档文件；新文件需至少 2 秒后重新扫描。仍可规划现有空目录清理。") }

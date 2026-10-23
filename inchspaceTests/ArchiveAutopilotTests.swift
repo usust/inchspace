@@ -144,7 +144,7 @@ final class ArchiveAutopilotTests: XCTestCase {
         XCTAssertTrue(ArchiveFileSystem.exists(source))
     }
 
-    func testUnusableAnswerIsRetriedThenSkipped() async throws {
+    func testLooseFileWithoutAnswerIsCollectedInUnsortedFolder() async throws {
         let f = try Fixture()
         defer { f.remove() }
         let source = try f.file("invoice.txt")
@@ -157,12 +157,68 @@ final class ArchiveAutopilotTests: XCTestCase {
         var reported: [ArchiveFileActivity] = []
         autopilot.report = { reported += $0 }
         let summary = try await autopilot.run()
-        XCTAssertEqual(calls, 2)
-        XCTAssertEqual(summary.leftUntouched, 1)
-        XCTAssertTrue(ArchiveFileSystem.exists(source))
-        XCTAssertTrue(reported.contains { $0.status == .skipped })
+        XCTAssertEqual(calls, 2, "A single file gets a second chance first.")
+        XCTAssertEqual(summary.movedFiles, 1)
+        let unsorted = f.workspace.appendingPathComponent("待分类/invoice.txt")
+        XCTAssertTrue(ArchiveFileSystem.exists(unsorted))
+        XCTAssertFalse(ArchiveFileSystem.exists(source))
+        XCTAssertFalse(reported.contains { $0.status == .skipped }, "No file is left without a result.")
+        let record = await service.snapshot().files?[unsorted.path]
+        XCTAssertEqual(record?.resolution, .unplaced, "Looked at again once the folders change.")
+        XCTAssertEqual(record?.previousFolder, "")
+    }
+
+    func testUnknownFileInASubfolderStaysWhereTheUserPutIt() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        try FileManager.default.createDirectory(at: f.workspace.appendingPathComponent("Keys"), withIntermediateDirectories: true)
+        let source = f.workspace.appendingPathComponent("Keys/main.kdbx")
+        try Data("db".utf8).write(to: source)
+        let service = try await f.service()
+        let summary = try await f.autopilot(service, planner: f.planner(review: { request in
+            ArchiveFileDecision(proposedName: "renamed.kdbx", topic: "", folder: request.folder, known: false)
+        })).run()
+        XCTAssertEqual(summary.movedFiles + summary.renamedFiles, 0)
+        XCTAssertTrue(ArchiveFileSystem.exists(source), "An unidentified file is never renamed or pulled out of its folder.")
         let record = await service.snapshot().files?[source.path]
-        XCTAssertNotNil(record, "A skipped file is recorded so it is not retried forever.")
+        XCTAssertEqual(record?.resolution, .organized)
+        XCTAssertFalse(record?.topic.isEmpty ?? true, "Without a topic from the model, the file's kind stands in.")
+    }
+
+    func testUnknownLooseFileJoinsClearlySimilarFilesAnywhereInTheTree() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        try FileManager.default.createDirectory(at: f.workspace.appendingPathComponent("Personal/Certificates"), withIntermediateDirectories: true)
+        try Data("pdf".utf8).write(to: f.workspace.appendingPathComponent("Personal/Certificates/aws-solutions-architect.pdf"))
+        _ = try f.file("aws solutions architect scan.jpg")
+        let service = try await f.service()
+        var offered: [String] = []
+        let summary = try await f.autopilot(service, planner: f.planner(review: { request in
+            offered = request.candidates.map(\.folder.path)
+            return ArchiveFileDecision(proposedName: request.file.source.lastPathComponent, folder: "", known: false)
+        })).run()
+        XCTAssertEqual(offered.first, "Personal/Certificates", "The deep folder holding similar files is the first candidate.")
+        XCTAssertEqual(summary.movedFiles, 1)
+        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("Personal/Certificates/aws solutions architect scan.jpg")))
+    }
+
+    func testModelThatAnswersNothingStopsTheRunWithoutMovingFiles() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let first = try f.file("a.txt")
+        let second = try f.file("b.txt")
+        let service = try await f.service()
+        var autopilot = f.autopilot(service, planner: f.planner(review: { _ in throw ArchiveError("模型只输出了思考过程") }))
+        autopilot.reviewBatch = 2
+        do {
+            _ = try await autopilot.run()
+            XCTFail("A model that never answers must stop the run.")
+        } catch let error as ArchiveNeedsReview {
+            XCTAssertTrue(error.message.contains("模型只输出了思考过程"))
+        }
+        XCTAssertTrue(ArchiveFileSystem.exists(first))
+        XCTAssertTrue(ArchiveFileSystem.exists(second))
+        XCTAssertFalse(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("待分类")))
     }
 
     // MARK: Step 2 – files into folders
@@ -528,12 +584,13 @@ final class ArchiveAutopilotTests: XCTestCase {
         autopilot.reviewBatch = 4
         let summary = try await autopilot.run()
         XCTAssertEqual(summary.renamedFiles, 3)
-        XCTAssertEqual(summary.leftUntouched, 1)
-        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("three.txt")), "The isolated file stays as it is.")
+        XCTAssertEqual(summary.movedFiles, 1)
+        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("待分类/three.txt")),
+                      "The isolated file is collected with other files nobody could identify.")
         XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("ok-one.txt")))
         XCTAssertEqual(asked.filter { $0 == ["three.txt"] }.count, 2, "A single file gets a second chance before being left alone.")
-        let record = await service.snapshot().files?[f.workspace.appendingPathComponent("three.txt").path]
-        XCTAssertEqual(record?.resolution, .unrecognized)
+        let record = await service.snapshot().files?[f.workspace.appendingPathComponent("待分类/three.txt").path]
+        XCTAssertEqual(record?.resolution, .unplaced)
     }
 
     func testTakenDestinationNamesLeaveTheFileInPlace() async throws {

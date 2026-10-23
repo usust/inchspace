@@ -46,6 +46,9 @@ nonisolated struct ArchiveAIFile: Codable, Sendable {
     var source: URL
     var fingerprint: ArchiveFingerprint
     var keywords: [String]
+    /// What the system knows about the file without reading it: type, size, dates and Spotlight attributes
+    /// such as title, author or where it was downloaded from (`ArchiveFileMetadata`).
+    var metadata: [String: String]? = nil
 }
 
 nonisolated struct ArchiveAIContext: Codable, Sendable {

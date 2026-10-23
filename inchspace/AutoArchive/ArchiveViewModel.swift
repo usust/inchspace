@@ -347,6 +347,7 @@ final class ArchiveViewModel: ObservableObject {
             autopilot.siblingLimit = tuning.siblingLimit
             autopilot.cooldown = .milliseconds(Int(tuning.cooldown * 1_000))
             autopilot.sortsByType = true
+            autopilot.candidateLimit = tuning.candidateLimit
             autopilot.report = { [weak self] updates in self?.record(updates) }
             var failure: String?
             var summary: ArchiveRunSummary?

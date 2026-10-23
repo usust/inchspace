@@ -124,11 +124,19 @@ nonisolated struct ArchiveAITuning: Equatable, Sendable {
     var disablesThinking: Bool
     /// Pause between two model requests, so a local GPU is not pinned at full load for minutes on end.
     var cooldown: TimeInterval
+    /// Similar folders sent per file, and example files shown for each.
+    var candidateLimit = 8
+    var candidateSamples = 5
+    /// Extra output tokens on top of the answer's own budget. Some local servers (LM Studio with Qwen3.5) ignore
+    /// the request not to think; the reasoning then counts against `max_tokens` and, with a budget sized for the
+    /// answer alone, the answer is cut off and the files are left without a result.
+    var reasoningAllowance = 0
 
     static let remote = ArchiveAITuning(batchSize: 30, reviewBatch: 10, keywordLimit: 80, folderLimit: 300, siblingLimit: 20,
                                         idleTimeout: 90, totalTimeout: 300, disablesThinking: false, cooldown: 0)
-    static let local = ArchiveAITuning(batchSize: 15, reviewBatch: 5, keywordLimit: 24, folderLimit: 120, siblingLimit: 10,
-                                       idleTimeout: 240, totalTimeout: 1_200, disablesThinking: true, cooldown: 0.5)
+    static let local = ArchiveAITuning(batchSize: 15, reviewBatch: 5, keywordLimit: 24, folderLimit: 160, siblingLimit: 8,
+                                       idleTimeout: 240, totalTimeout: 1_200, disablesThinking: true, cooldown: 0.5,
+                                       candidateLimit: 6, candidateSamples: 4, reasoningAllowance: 3_000)
 
     static func isLocal(_ configuration: TerminalAIConfiguration) -> Bool {
         if configuration.service == .ollama { return true }
@@ -172,8 +180,12 @@ struct ArchiveAIClient {
         // Deterministic sampling keeps the JSON tight; the system prompt is byte-identical across requests so
         // local servers can reuse their prompt cache for it.
         var body: [String: Any] = [
-            "model": configuration.model, "stream": true, "max_tokens": max(256, maxTokens), "temperature": 0,
-            "messages": [["role": "system", "content": system], ["role": "user", "content": user]],
+            "model": configuration.model, "stream": true, "max_tokens": max(256, maxTokens) + tuning.reasoningAllowance,
+            "temperature": 0,
+            // Qwen's soft switch, at the very end so the cached prefix stays the same; it is ignored where the
+            // template flag below already turned thinking off, and helps where a server drops that flag.
+            "messages": [["role": "system", "content": system],
+                         ["role": "user", "content": tuning.disablesThinking ? user + "\n/no_think" : user]],
         ]
         if tuning.disablesThinking {
             // llama.cpp, vLLM and LM Studio read chat_template_kwargs; Ollama reads think. Both ignore the other.

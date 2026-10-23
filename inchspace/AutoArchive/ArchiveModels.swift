@@ -203,9 +203,14 @@ nonisolated struct ArchiveFileRecord: Codable, Equatable, Sendable {
     var name: String { (path as NSString).lastPathComponent }
     var wasRenamed: Bool { renamed && name != originalName }
 
+    /// The reason earlier versions saved when the model gave no usable answer. Those files were left as they
+    /// were without any judgment, so they are looked at once more with the fuller evidence sent now.
+    static let legacyNoAnswerReason = "没有得到有效的结果，保留原名并留在原处"
+
     /// Whether a run should look at this unchanged file again.
     func needsReview(structure current: String) -> Bool {
-        !isResolved && structure != current
+        if resolution == .unrecognized && reason == Self.legacyNoAnswerReason { return true }
+        return !isResolved && structure != current
     }
 }
 

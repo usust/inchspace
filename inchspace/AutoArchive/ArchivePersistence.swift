@@ -12,6 +12,9 @@ nonisolated final class ArchivePersistence: @unchecked Sendable {
     /// Encoded rows as they are on disk, keyed by collection then record key; `save` diffs against it.
     private var rows: [String: [String: Row]] = [:]
     private var meta: [String: Data] = [:]
+    /// The state the rows were encoded from. A record equal to its previous value reuses its encoded row,
+    /// so a commit that touches one file does not re-encode thousands of others.
+    private var lastState: ArchiveState?
 
     private struct Row: Equatable {
         var position: Int
@@ -131,14 +134,19 @@ nonisolated final class ArchivePersistence: @unchecked Sendable {
         if state.files != nil { nextMeta[Meta.filesPresent] = Data([1]) }
 
         var nextRows: [String: [String: Row]] = [:]
-        nextRows[Collection.rules] = try indexed(state.rules, key: { $0.directory.path }, encoder: encoder)
-        nextRows[Collection.suggestions] = try indexed(state.suggestions, key: { $0.id.uuidString }, encoder: encoder)
-        nextRows[Collection.operations] = try indexed(state.operations, key: { $0.id.uuidString }, encoder: encoder)
-        nextRows[Collection.plans] = try indexed(state.ai?.plans ?? [], key: { $0.id.uuidString }, encoder: encoder)
-        nextRows[Collection.observations] = try state.observations.mapValues { Row(position: 0, data: try encoder.encode($0)) }
-        nextRows[Collection.cache] = try state.cache.mapValues { Row(position: 0, data: try encoder.encode($0)) }
-        nextRows[Collection.settled] = try (state.settled ?? [:]).mapValues { Row(position: 0, data: try encoder.encode($0)) }
-        nextRows[Collection.files] = try (state.files ?? [:]).mapValues { Row(position: 0, data: try encoder.encode($0)) }
+        let previous = lastState
+        nextRows[Collection.rules] = try indexed(state.rules, previous: previous?.rules, collection: Collection.rules,
+                                                 key: { $0.directory.path }, encoder: encoder)
+        nextRows[Collection.suggestions] = try indexed(state.suggestions, previous: previous?.suggestions, collection: Collection.suggestions,
+                                                       key: { $0.id.uuidString }, encoder: encoder)
+        nextRows[Collection.operations] = try indexed(state.operations, previous: previous?.operations, collection: Collection.operations,
+                                                      key: { $0.id.uuidString }, encoder: encoder)
+        nextRows[Collection.plans] = try indexed(state.ai?.plans ?? [], previous: previous?.ai?.plans, collection: Collection.plans,
+                                                 key: { $0.id.uuidString }, encoder: encoder)
+        nextRows[Collection.observations] = try keyed(state.observations, previous: previous?.observations, collection: Collection.observations, encoder: encoder)
+        nextRows[Collection.cache] = try keyed(state.cache, previous: previous?.cache, collection: Collection.cache, encoder: encoder)
+        nextRows[Collection.settled] = try keyed(state.settled ?? [:], previous: previous?.settled, collection: Collection.settled, encoder: encoder)
+        nextRows[Collection.files] = try keyed(state.files ?? [:], previous: previous?.files, collection: Collection.files, encoder: encoder)
 
         try transaction {
             for (key, data) in nextMeta where meta[key] != data { try upsertMeta(key, data) }
@@ -152,15 +160,39 @@ nonisolated final class ArchivePersistence: @unchecked Sendable {
         }
         meta = nextMeta
         rows = nextRows
+        lastState = state
     }
 
     // MARK: Encoding helpers
 
-    private func indexed<T: Encodable>(_ items: [T], key: (T) -> String, encoder: JSONEncoder) throws -> [String: Row] {
+    private func indexed<T: Encodable & Equatable>(_ items: [T], previous: [T]?, collection: String,
+                                                   key: (T) -> String, encoder: JSONEncoder) throws -> [String: Row] {
+        var before: [String: T] = [:]
+        for item in previous ?? [] where before[key(item)] == nil { before[key(item)] = item }
         var result: [String: Row] = [:]
         for (position, item) in items.enumerated() {
+            let name = key(item)
             // A duplicate key keeps its first occurrence so the row count matches a set of records.
-            if result[key(item)] == nil { result[key(item)] = Row(position: position, data: try encoder.encode(item)) }
+            guard result[name] == nil else { continue }
+            if let old = before[name], old == item, let row = rows[collection]?[name] {
+                result[name] = Row(position: position, data: row.data)
+            } else {
+                result[name] = Row(position: position, data: try encoder.encode(item))
+            }
+        }
+        return result
+    }
+
+    private func keyed<T: Encodable & Equatable>(_ items: [String: T], previous: [String: T]?, collection: String,
+                                                 encoder: JSONEncoder) throws -> [String: Row] {
+        var result: [String: Row] = [:]
+        result.reserveCapacity(items.count)
+        for (name, item) in items {
+            if let old = previous?[name], old == item, let row = rows[collection]?[name] {
+                result[name] = row
+            } else {
+                result[name] = Row(position: 0, data: try encoder.encode(item))
+            }
         }
         return result
     }

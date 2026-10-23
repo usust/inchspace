@@ -282,10 +282,102 @@ final class ArchiveAIPlanningTests: XCTestCase {
         XCTAssertFalse(ArchiveAITuning.isLocal(TerminalAIConfiguration(service: .deepSeek, baseURL: "https://api.deepseek.com", model: "deepseek-chat")))
         let local = ArchiveAITuning.local, remote = ArchiveAITuning.remote
         XCTAssertLessThan(local.batchSize, remote.batchSize)
+        XCTAssertLessThan(local.reviewBatch, remote.reviewBatch)
         XCTAssertLessThan(local.keywordLimit, remote.keywordLimit)
+        XCTAssertLessThan(local.folderLimit, remote.folderLimit)
+        XCTAssertGreaterThan(local.cooldown, remote.cooldown)
         XCTAssertGreaterThan(local.idleTimeout, remote.idleTimeout)
         XCTAssertGreaterThan(local.totalTimeout, remote.totalTimeout)
         XCTAssertTrue(local.disablesThinking)
+    }
+
+    func testBatchReviewPayloadLeadsWithFoldersAndNumbersFiles() throws {
+        let fingerprint = ArchiveFingerprint(device: 1, inode: 1, size: 1, modifiedSeconds: 0, modifiedNanoseconds: 0, sha256: "secret-hash")
+        func file(_ name: String, keywords: [String]) -> ArchiveAIFile {
+            ArchiveAIFile(id: UUID().uuidString, rootID: "root", relativePath: name, source: URL(fileURLWithPath: "/private/ws/" + name),
+                          fingerprint: fingerprint, keywords: keywords)
+        }
+        let reviews = [
+            ArchiveFileReview(file: file("INV-0042 scan.pdf", keywords: ["invoice", "payable", "accounting"]), folder: "", folders: ["Finance", "Music"], siblings: ["other.pdf"]),
+            ArchiveFileReview(file: file("song.mp3", keywords: []), folder: "Music", folders: ["Finance", "Music"]),
+        ]
+        var tuning = ArchiveAITuning.local
+        tuning.keywordLimit = 2
+        let payload = try ArchiveStagePrompt.payload(review: ArchiveBatchReview(folders: ["Finance", "Music"], files: reviews), tuning: tuning)
+        XCTAssertTrue(payload.hasPrefix("{\"folders\":[\"Finance\",\"Music\"],\"files\":["), "stable part first, so a prompt cache covers it")
+        XCTAssertFalse(payload.contains("/private/ws"))
+        XCTAssertFalse(payload.contains("secret-hash"))
+        XCTAssertFalse(payload.contains(reviews[0].file.id), "files are numbered instead of echoing UUIDs")
+        XCTAssertTrue(payload.contains("\"id\":1"))
+        XCTAssertTrue(payload.contains("\"keep\":[\"INV-0042\"]"))
+        XCTAssertTrue(payload.contains("\"keywords\":[\"invoice\",\"payable\"]"), "keyword limit applies")
+        XCTAssertFalse(payload.contains("accounting"))
+
+        let answer = """
+        ```json
+        {"files":[{"id":"1","name":"INV-0042 发票.pdf","folder":"Finance","fits":"false","topic":"发票","summary":"一张应付发票","reason":"关键词"},
+                  {"id":2,"name":"song.mp3","folder":"Music","fits":true,"topic":"","summary":""}]}
+        ```
+        """
+        let decisions = try ArchiveStagePrompt.decodeReview(answer, files: reviews)
+        XCTAssertEqual(decisions.count, 2)
+        XCTAssertEqual(decisions[reviews[0].file.id]?.proposedName, "INV-0042 发票.pdf")
+        XCTAssertEqual(decisions[reviews[0].file.id]?.belongsHere, false)
+        XCTAssertEqual(decisions[reviews[0].file.id]?.summary, "一张应付发票")
+        XCTAssertEqual(decisions[reviews[1].file.id]?.belongsHere, true)
+
+        // One answer for one file may come back bare; an answer naming no file is unusable.
+        let single = try ArchiveStagePrompt.decodeReview("{\"name\":\"song.mp3\",\"folder\":\"Music\",\"fits\":true}", files: [reviews[1]])
+        XCTAssertEqual(single[reviews[1].file.id]?.folder, "Music")
+        XCTAssertThrowsError(try ArchiveStagePrompt.decodeReview("{\"files\":[{\"id\":9,\"name\":\"ghost.txt\"}]}", files: reviews))
+        XCTAssertThrowsError(try ArchiveStagePrompt.decodeReview("not json", files: reviews))
+    }
+
+    func testLargeFilesUseASampledHashAndMetadataChecks() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let url = f.inbox.appendingPathComponent("big.bin")
+        XCTAssertTrue(FileManager.default.createFile(atPath: url.path, contents: nil))
+        let file = try FileHandle(forWritingTo: url)
+        try file.seek(toOffset: UInt64(ArchiveFileSystem.sampledHashThreshold) + 1_024)
+        try file.write(contentsOf: Data([1]))
+        try file.close()
+        let started = Date()
+        let first = try ArchiveFileSystem.fingerprint(url)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 2, "a 64 MB file must not be read end to end")
+        XCTAssertEqual(first, try ArchiveFileSystem.fingerprint(url), "sampled hashes are stable")
+        XCTAssertTrue(ArchiveFileSystem.matches(url, first))
+        Thread.sleep(forTimeInterval: 0.01)
+        let touched = try FileHandle(forWritingTo: url)
+        try touched.seek(toOffset: 0)
+        try touched.write(contentsOf: Data([9]))
+        try touched.close()
+        XCTAssertFalse(ArchiveFileSystem.matches(url, first), "a changed modification time is enough to notice")
+        XCTAssertNotNil(ArchiveFileSystem.creationSeconds(url))
+    }
+
+    func testFileRecordsKeepSummaryAndOriginAcrossSaves() throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        var state = ArchiveState()
+        let fingerprint = ArchiveFingerprint(device: 1, inode: 2, size: 3, modifiedSeconds: 4, modifiedNanoseconds: 5, sha256: "x")
+        var record = ArchiveFileRecord(path: "/a/b.pdf", fingerprint: fingerprint, originalName: "scan.pdf", topic: "发票", renamed: true,
+                                       reason: "关键词", stage: .grouped)
+        record.summary = "一张发票"
+        record.createdSeconds = 1_700_000_000
+        record.previousFolder = ""
+        record.operationID = UUID()
+        state.files = ["/a/b.pdf": record]
+        do {
+            let persistence = try ArchivePersistence(directory: f.state)
+            try persistence.save(state)
+            // A second save with the same records reuses the encoded rows.
+            try persistence.save(state)
+        }
+        let loaded = try ArchivePersistence(directory: f.state).load()
+        XCTAssertEqual(loaded.files?["/a/b.pdf"], record)
+        XCTAssertEqual(loaded.files?["/a/b.pdf"]?.createdAt, Date(timeIntervalSince1970: 1_700_000_000))
+        XCTAssertTrue(loaded.files?["/a/b.pdf"]?.wasRenamed == true)
     }
 
     func testDecoderIgnoresThinkingBlocksAndCodeFences() throws {

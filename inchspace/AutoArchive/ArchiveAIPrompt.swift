@@ -106,19 +106,29 @@ nonisolated struct ArchiveAIUnavailable: LocalizedError, Sendable {
 /// Connection limits chosen for where the model runs. A model on this Mac needs small batches and patience:
 /// it has to read the whole prompt before the first token arrives, and it writes the plan slowly.
 nonisolated struct ArchiveAITuning: Equatable, Sendable {
-    /// Files offered to the model per round.
+    /// Files taken from one scan.
     var batchSize: Int
+    /// Files reviewed in one model request.
+    var reviewBatch: Int
     /// Keywords sent per file.
     var keywordLimit: Int
+    /// Existing folders listed in a review question.
+    var folderLimit: Int
+    /// Other files of the same folder shown per file.
+    var siblingLimit: Int
     /// Longest silence tolerated between two chunks of the response.
     var idleTimeout: TimeInterval
     /// Longest time for one planning request as a whole.
     var totalTimeout: TimeInterval
     /// Ask thinking models (Qwen3, DeepSeek-R1 style) to answer directly instead of reasoning first.
     var disablesThinking: Bool
+    /// Pause between two model requests, so a local GPU is not pinned at full load for minutes on end.
+    var cooldown: TimeInterval
 
-    static let remote = ArchiveAITuning(batchSize: 30, keywordLimit: 80, idleTimeout: 90, totalTimeout: 300, disablesThinking: false)
-    static let local = ArchiveAITuning(batchSize: 12, keywordLimit: 40, idleTimeout: 240, totalTimeout: 1_200, disablesThinking: true)
+    static let remote = ArchiveAITuning(batchSize: 30, reviewBatch: 10, keywordLimit: 80, folderLimit: 300, siblingLimit: 20,
+                                        idleTimeout: 90, totalTimeout: 300, disablesThinking: false, cooldown: 0)
+    static let local = ArchiveAITuning(batchSize: 15, reviewBatch: 5, keywordLimit: 24, folderLimit: 120, siblingLimit: 10,
+                                       idleTimeout: 240, totalTimeout: 1_200, disablesThinking: true, cooldown: 0.5)
 
     static func isLocal(_ configuration: TerminalAIConfiguration) -> Bool {
         if configuration.service == .ollama { return true }
@@ -145,7 +155,8 @@ struct ArchiveAIClient {
                     configuration: configuration, apiKey: apiKey)
     }
 
-    func request(system: String, user: String, configuration: TerminalAIConfiguration, apiKey: String) throws -> URLRequest {
+    func request(system: String, user: String, configuration: TerminalAIConfiguration, apiKey: String,
+                 maxTokens: Int = 6_000) throws -> URLRequest {
         let configuration = try configuration.validated()
         let tuning = tuning ?? ArchiveAITuning.tuning(for: configuration)
         let url = try configuration.endpoint("chat/completions")
@@ -158,8 +169,10 @@ struct ArchiveAIClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         if !apiKey.isEmpty { request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
+        // Deterministic sampling keeps the JSON tight; the system prompt is byte-identical across requests so
+        // local servers can reuse their prompt cache for it.
         var body: [String: Any] = [
-            "model": configuration.model, "stream": true, "max_tokens": 6_000,
+            "model": configuration.model, "stream": true, "max_tokens": max(256, maxTokens), "temperature": 0,
             "messages": [["role": "system", "content": system], ["role": "user", "content": user]],
         ]
         if tuning.disablesThinking {
@@ -179,8 +192,8 @@ struct ArchiveAIClient {
 
     /// One streamed request with the given instructions; returns the answer text without reasoning.
     func complete(system: String, user: String, configuration: TerminalAIConfiguration, apiKey: String,
-                  onProgress: @MainActor (Int) -> Void = { _ in }) async throws -> String {
-        let request = try request(system: system, user: user, configuration: configuration, apiKey: apiKey)
+                  maxTokens: Int = 6_000, onProgress: @MainActor (Int) -> Void = { _ in }) async throws -> String {
+        let request = try request(system: system, user: user, configuration: configuration, apiKey: apiKey, maxTokens: maxTokens)
         return try await send(request, configuration: configuration, onProgress: onProgress)
     }
 

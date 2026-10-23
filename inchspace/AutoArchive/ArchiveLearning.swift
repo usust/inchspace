@@ -25,6 +25,11 @@ nonisolated enum ArchiveLearning {
         return words
     }
 
+    /// Enough text to tell what a document is about; the model only sees a few dozen keywords anyway, and
+    /// parsing a long PDF page by page is where a scan spends most of its time.
+    static let textPrefixLimit = 6_000
+    static let pdfPageLimit = 8
+
     static func extract(_ file: ArchiveEvidence, maxBytes: Int) throws -> ArchiveEvidence {
         let (fingerprint, data) = try ArchiveFileSystem.read(file.url, maxBytes: maxBytes)
         guard fingerprint == file.fingerprint else { throw ArchiveError("文件已变化，请重新扫描。") }
@@ -32,23 +37,23 @@ nonisolated enum ArchiveLearning {
         var note: String?
         switch file.url.pathExtension.lowercased() {
         case "txt", "md", "csv", "rst", "json", "log":
-            if let decoded = String(data: data, encoding: .utf8) { text = String(decoded.prefix(12_000)) }
+            if let decoded = String(data: data, encoding: .utf8) { text = String(decoded.prefix(textPrefixLimit)) }
             else { note = "非 UTF-8 文本，仅使用文件名匹配。" }
         case "pdf":
             if let document = PDFDocument(data: data), !document.isEncrypted {
-                for index in 0..<min(document.pageCount, 50) {
-                    text += String((document.page(at: index)?.string ?? "").prefix(12_000 - text.count)) + " "
-                    if text.count >= 12_000 { break }
+                for index in 0..<min(document.pageCount, pdfPageLimit) {
+                    text += String((document.page(at: index)?.string ?? "").prefix(textPrefixLimit - text.count)) + " "
+                    if text.count >= textPrefixLimit { break }
                 }
                 if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { note = "未找到 PDF 文本，不进行 OCR。" }
             } else { note = "PDF 已加密或无法读取，仅使用文件名匹配。" }
         case "docx":
-            do { text = try ArchiveWordExtractor.text(from: data) }
+            do { text = String(try ArchiveWordExtractor.text(from: data).prefix(textPrefixLimit)) }
             catch { note = "\(error.localizedDescription) 仅使用文件名匹配。" }
         default:
             note = "此格式仅使用文件名匹配。"
         }
-        guard try ArchiveFileSystem.fingerprint(file.url, maxBytes: maxBytes) == file.fingerprint else {
+        guard ArchiveFileSystem.matches(file.url, file.fingerprint, maxBytes: maxBytes) else {
             throw ArchiveError("提取过程中，文件发生变化。")
         }
         return ArchiveEvidence(url: file.url, fingerprint: fingerprint,

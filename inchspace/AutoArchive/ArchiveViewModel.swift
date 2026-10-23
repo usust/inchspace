@@ -16,6 +16,61 @@ enum ArchiveActivity: Equatable {
     case failed(String)
 }
 
+/// Which rows of the file list are shown.
+enum ArchiveEntryFilter: String, CaseIterable, Identifiable {
+    case all, moved, renamed, unplaced, failed
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .all: "全部"
+        case .moved: "已移动"
+        case .renamed: "已改名"
+        case .unplaced: "未归位"
+        case .failed: "失败"
+        }
+    }
+}
+
+/// One row of the file list: a file autopilot has looked at, live from this run or saved from an earlier one.
+struct ArchiveFileEntry: Identifiable, Equatable {
+    enum Change: Equatable {
+        case none
+        case renamed(from: String, to: String)
+        case moved(from: String, to: String)
+        case movedAndRenamed(fromFolder: String, toFolder: String, fromName: String, toName: String)
+    }
+
+    var id: String { path }
+    /// Current path of the file (after any move).
+    var path: String
+    var status: ArchiveFileActivity.Status
+    var detail: String?
+    var record: ArchiveFileRecord?
+    var updatedAt: Date
+    /// True for files touched by the run in progress or the one just finished.
+    var isLive: Bool
+    /// Folder relative to the workspace; empty for the workspace itself.
+    var folder: String
+
+    var name: String { (path as NSString).lastPathComponent }
+    var topic: String { record?.topic ?? "" }
+
+    var change: Change {
+        guard let record else { return .none }
+        let renamed = record.wasRenamed
+        let moved = record.previousFolder != nil && record.previousFolder != folder
+        switch (moved, renamed) {
+        case (true, true): return .movedAndRenamed(fromFolder: record.previousFolder ?? "", toFolder: folder, fromName: record.originalName, toName: record.name)
+        case (true, false): return .moved(from: record.previousFolder ?? "", to: folder)
+        case (false, true): return .renamed(from: record.originalName, to: record.name)
+        case (false, false): return .none
+        }
+    }
+
+    var isMoved: Bool { if case .none = change { return false }; if case .renamed = change { return false }; return true }
+    var isRenamed: Bool { record?.wasRenamed == true }
+}
+
 @MainActor
 final class ArchiveViewModel: ObservableObject {
     static let shared = ArchiveViewModel()
@@ -26,7 +81,7 @@ final class ArchiveViewModel: ObservableObject {
         static let watching = "archive.autopilot.watching"
     }
 
-    @Published private(set) var state = ArchiveState()
+    @Published private(set) var state = ArchiveState() { didSet { rebuildEntries() } }
     @Published private(set) var isReady = false
     @Published private(set) var loadError: String?
     @Published var onboardingStep: ArchiveOnboardingStep = .welcome
@@ -38,11 +93,17 @@ final class ArchiveViewModel: ObservableObject {
     @Published private(set) var lastSummary: ArchiveRunSummary?
     @Published private(set) var lastRunAt: Date?
     /// Files seen by recent runs, the ones still in flight first, then newest result first.
-    @Published private(set) var fileActivity: [ArchiveFileActivity] = []
+    @Published private(set) var fileActivity: [ArchiveFileActivity] = [] { didSet { rebuildEntries() } }
+    /// Every file with a result, live ones first, newest first.
+    @Published private(set) var entries: [ArchiveFileEntry] = []
+    @Published var filter: ArchiveEntryFilter = .all
+    @Published var searchText = ""
+    @Published var selectedPath: String?
 
     private let defaults: UserDefaults
     private var service: ArchiveService?
     private var settings: TerminalAISettings?
+    private var settingsObserver: AnyCancellable?
     private var runTask: Task<Void, Never>?
     private var rerunRequested = false
     private lazy var watcher = ArchiveFolderWatcher { [weak self] in self?.folderChanged() }
@@ -50,10 +111,7 @@ final class ArchiveViewModel: ObservableObject {
     init(defaults: UserDefaults = .standard) { self.defaults = defaults }
 
     var workspace: ArchiveFolder? { state.configuration.folders.first { $0.role == .workspace } }
-    var hasConsent: Bool { defaults.bool(forKey: Keys.consent) }
-    var isOnboarded: Bool { defaults.bool(forKey: Keys.onboarded) || hasConsent }
-    /// AI is used only with consent and a working model; otherwise the offline planner takes over.
-    var usesAI: Bool { hasConsent && isModelConfigured }
+    var isOnboarded: Bool { defaults.bool(forKey: Keys.onboarded) || defaults.bool(forKey: Keys.consent) }
     var isRunning: Bool { runTask != nil }
 
     var screen: ArchiveScreen {
@@ -68,12 +126,21 @@ final class ArchiveViewModel: ObservableObject {
         }.sorted { $0.createdAt > $1.createdAt }
     }
 
+    /// Organizing is done by the model only; without a working connection nothing starts.
     var isModelConfigured: Bool {
         guard let settings, let configuration = try? settings.configuration.validated() else { return false }
         return (try? settings.apiKey(for: configuration.baseURL)) != nil
     }
 
-    func attach(settings: TerminalAISettings) { self.settings = settings }
+    var modelName: String? { try? settings?.configuration.validated().model }
+
+    func attach(settings: TerminalAISettings) {
+        guard self.settings !== settings else { return }
+        self.settings = settings
+        settingsObserver = settings.objectWillChange.sink { [weak self] _ in
+            DispatchQueue.main.async { self?.objectWillChange.send() }
+        }
+    }
 
     // MARK: Lifecycle
 
@@ -124,6 +191,8 @@ final class ArchiveViewModel: ObservableObject {
             let folder = ArchiveFolder(role: .workspace, url: url, bookmark: bookmark,
                                        directoryPermission: ArchiveDirectoryPermission(canCreate: true, canRemoveEmpty: true))
             try await service.configure(ArchiveConfiguration(folders: [folder]))
+            fileActivity = []
+            selectedPath = nil
             state = await service.snapshot()
             activity = .idle
             lastSummary = nil
@@ -132,20 +201,14 @@ final class ArchiveViewModel: ObservableObject {
         } catch { activity = .failed(error.localizedDescription) }
     }
 
-    /// Finishes the guide. With consent the model plans the folder; without it the offline planner does.
-    func finishOnboarding(useAI: Bool) {
+    /// Finishes the guide; the model plans the folder from here on.
+    func finishOnboarding() {
         defaults.set(true, forKey: Keys.onboarded)
-        defaults.set(useAI, forKey: Keys.consent)
+        defaults.set(true, forKey: Keys.consent)
         defaults.set(true, forKey: Keys.watching)
         objectWillChange.send()
         startWatching()
         organize()
-    }
-
-    func setAI(_ enabled: Bool) {
-        if enabled, !isModelConfigured { openModelSettings(); return }
-        defaults.set(enabled, forKey: Keys.consent)
-        objectWillChange.send()
     }
 
     // MARK: Running
@@ -155,26 +218,29 @@ final class ArchiveViewModel: ObservableObject {
             rerunRequested = runTask != nil
             return
         }
-        let planner: ArchiveStagePlanner
-        var tuning = ArchiveAITuning.remote
-        if usesAI, let settings, let configuration = try? settings.configuration.validated(),
-           let key = try? settings.apiKey(for: configuration.baseURL) {
-            tuning = ArchiveAITuning.tuning(for: configuration)
-            planner = .ai(configuration: configuration, apiKey: key) { [weak self] received in
-                // Chunks arrive far faster than the eye can follow; publish roughly 20 characters at a time.
-                guard let current = self?.progress?.receivedCharacters, received < current || received - current >= 20 else { return }
-                self?.progress?.receivedCharacters = received
-            }
-        } else {
-            planner = .local
+        guard let settings, let configuration = try? settings.configuration.validated(),
+              let key = try? settings.apiKey(for: configuration.baseURL) else {
+            // Nothing runs without a model; the status strip says so and offers the settings.
+            objectWillChange.send()
+            return
+        }
+        let tuning = ArchiveAITuning.tuning(for: configuration)
+        let planner = ArchiveStagePlanner.ai(configuration: configuration, apiKey: key, tuning: tuning) { [weak self] received in
+            // Chunks arrive far faster than the eye can follow; publish roughly 20 characters at a time.
+            guard let current = self?.progress?.receivedCharacters, received < current || received - current >= 20 else { return }
+            self?.progress?.receivedCharacters = received
         }
         progress = ArchiveRunProgress()
         runStartedAt = Date()
         activity = .working(title(for: ArchiveRunProgress()))
-        runTask = Task { [weak self] in
+        // Utility priority: the model and the disk get their breathing room, the UI stays first.
+        runTask = Task(priority: .utility) { [weak self] in
             var autopilot = ArchiveAutopilot(service: service, planner: planner)
             autopilot.batchSize = tuning.batchSize
+            autopilot.reviewBatch = tuning.reviewBatch
             autopilot.keywordLimit = tuning.keywordLimit
+            autopilot.siblingLimit = tuning.siblingLimit
+            autopilot.cooldown = .milliseconds(Int(tuning.cooldown * 1_000))
             autopilot.report = { [weak self] updates in self?.record(updates) }
             var failure: String?
             var summary: ArchiveRunSummary?
@@ -191,6 +257,7 @@ final class ArchiveViewModel: ObservableObject {
     }
 
     private static let fileActivityLimit = 300
+    private static let entryLimit = 600
 
     private func record(_ updates: [ArchiveFileActivity]) {
         guard !updates.isEmpty else { return }
@@ -205,12 +272,99 @@ final class ArchiveViewModel: ObservableObject {
 
     func clearFileActivity() { fileActivity.removeAll { $0.status != .processing } }
 
+    /// Counts for the status strip: what this run has done so far.
+    var liveCounts: (completed: Int, unplaced: Int, failed: Int, waiting: Int) {
+        var counts = (completed: 0, unplaced: 0, failed: 0, waiting: 0)
+        for item in fileActivity {
+            switch item.status {
+            case .completed: counts.completed += 1
+            case .unplaced: counts.unplaced += 1
+            case .skipped, .failed: counts.failed += 1
+            case .queued, .processing: counts.waiting += 1
+            }
+        }
+        return counts
+    }
+
+    // MARK: File list
+
+    private func rebuildEntries() {
+        let root = workspace?.url.path ?? ""
+        func relativeFolder(_ path: String) -> String {
+            let folder = (path as NSString).deletingLastPathComponent
+            guard !root.isEmpty, folder.hasPrefix(root) else { return folder }
+            return String(folder.dropFirst(root.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        }
+        var byPath: [String: ArchiveFileEntry] = [:]
+        for (path, record) in state.files ?? [:] {
+            let status: ArchiveFileActivity.Status = switch record.resolution ?? .organized {
+            case .organized: .completed
+            case .unplaced: .unplaced
+            case .unrecognized: .skipped
+            }
+            byPath[path] = ArchiveFileEntry(path: path, status: status, detail: nil, record: record,
+                                            updatedAt: record.processedAt, isLive: false, folder: relativeFolder(path))
+        }
+        for item in fileActivity {
+            // A live item is keyed by where the file was when the run picked it up; a saved result knows where it went.
+            let path = item.record?.path ?? item.path
+            if path != item.path { byPath.removeValue(forKey: item.path) }
+            var entry = byPath[path] ?? ArchiveFileEntry(path: path, status: item.status, detail: item.detail, record: nil,
+                                                          updatedAt: item.updatedAt, isLive: true, folder: relativeFolder(path))
+            entry.status = item.status
+            entry.detail = item.detail
+            entry.updatedAt = max(entry.updatedAt, item.updatedAt)
+            entry.isLive = true
+            if let record = item.record { entry.record = record }
+            byPath[path] = entry
+        }
+        var list = Array(byPath.values)
+        list.sort { lhs, rhs in
+            let left = lhs.status == .processing, right = rhs.status == .processing
+            if left != right { return left }
+            if lhs.isLive != rhs.isLive { return lhs.isLive }
+            return lhs.updatedAt != rhs.updatedAt ? lhs.updatedAt > rhs.updatedAt : lhs.path < rhs.path
+        }
+        entries = Array(list.prefix(Self.entryLimit))
+        if let selectedPath, !entries.contains(where: { $0.path == selectedPath }) {
+            // The selected file moved: follow it to its new path when the record went along.
+            self.selectedPath = entries.first { $0.record?.originalName == (selectedPath as NSString).lastPathComponent && $0.isLive }?.path
+        }
+    }
+
+    var filteredEntries: [ArchiveFileEntry] {
+        let needle = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return entries.filter { entry in
+            switch filter {
+            case .all: break
+            case .moved: guard entry.isMoved else { return false }
+            case .renamed: guard entry.isRenamed else { return false }
+            case .unplaced: guard entry.status == .unplaced else { return false }
+            case .failed: guard entry.status == .failed || entry.status == .skipped else { return false }
+            }
+            guard !needle.isEmpty else { return true }
+            return entry.name.lowercased().contains(needle) || entry.folder.lowercased().contains(needle)
+                || entry.topic.lowercased().contains(needle) || (entry.record?.summary ?? "").lowercased().contains(needle)
+                || (entry.record?.originalName ?? "").lowercased().contains(needle)
+        }
+    }
+
+    var selectedEntry: ArchiveFileEntry? { selectedPath.flatMap { path in entries.first { $0.path == path } } }
+
+    /// The journal entry that moved the file, while it can still be undone.
+    func undoableOperation(for entry: ArchiveFileEntry) -> ArchiveOperation? {
+        guard let id = entry.record?.operationID else { return nil }
+        return state.operations.first { $0.id == id && $0.status == .complete && $0.destination.path == entry.path }
+    }
+
+    func fileExists(_ entry: ArchiveFileEntry) -> Bool { ArchiveFileSystem.exists(URL(fileURLWithPath: entry.path)) }
+
     private func title(for progress: ArchiveRunProgress) -> String {
         switch progress.phase {
         case .scanning: progress.round == 0 ? "正在查看文件…" : "正在重新扫描文件夹…"
         case .waitingForStableFiles: "等待 \(progress.remainingFiles) 个新文件写入完成…"
         case .consolidating: "正在合并含义相同的文件夹…"
-        case .reviewing: "正在查看「\(progress.directory)」…"
+        case .reviewing: progress.batchFiles > 1 ? "正在识别 \(progress.batchFiles) 个文件…" : "正在查看「\(progress.directory)」…"
         case .grouping: "正在为「\(progress.directory)」中的 \(progress.batchFiles) 个文件归类…"
         case .nesting: "正在梳理「\(progress.directory)」的文件夹层级…"
         case .applying: "正在应用更改…"
@@ -223,7 +377,7 @@ final class ArchiveViewModel: ObservableObject {
         var parts: [String] = []
         if progress.round > 0 { parts.append("第 \(progress.round) 轮") }
         if progress.totalFiles > 0 { parts.append("已处理 \(progress.processedFiles)/\(progress.totalFiles) 个文件") }
-        if [.consolidating, .reviewing, .grouping, .nesting].contains(progress.phase), usesAI {
+        if [.consolidating, .reviewing, .grouping, .nesting].contains(progress.phase) {
             parts.append(progress.receivedCharacters > 0 ? "模型已回复 \(progress.receivedCharacters) 字" : "等待模型回复")
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
@@ -284,23 +438,46 @@ final class ArchiveViewModel: ObservableObject {
         defer { if wasWatching { startWatching() } }
         do {
             for operation in plan.files.reversed() where operation.status == .complete {
-                try await service.undo(operation.id)
-                // A file the user moved back must stay where they put it, with its result still recorded.
-                try await service.markSettled([operation.source.path: operation.fingerprint], removing: [operation.destination.path])
-                try await service.moveRecords(from: operation.destination.path, to: operation.source.path)
+                try await undoOperation(operation, service: service)
             }
             for operation in plan.directories.reversed() where operation.status == .complete {
                 try await service.undoAIDirectory(planID: plan.id, operationID: operation.id)
             }
             activity = .idle
         } catch { activity = .failed(error.localizedDescription) }
+        fileActivity.removeAll { item in plan.files.contains { $0.source.path == item.path || $0.destination.path == (item.record?.path ?? item.path) } }
         state = await service.snapshot()
+    }
+
+    /// Puts one file back where it was, leaving the rest of its batch alone.
+    func undoFile(_ entry: ArchiveFileEntry) async {
+        guard let service, runTask == nil, let operation = undoableOperation(for: entry) else { return }
+        let wasWatching = isWatching
+        stopWatching()
+        activity = .working("正在撤销…")
+        defer { if wasWatching { startWatching() } }
+        do {
+            try await undoOperation(operation, service: service)
+            activity = .idle
+        } catch { activity = .failed(error.localizedDescription) }
+        fileActivity.removeAll { ($0.record?.path ?? $0.path) == entry.path || $0.path == operation.source.path }
+        selectedPath = operation.source.path
+        state = await service.snapshot()
+    }
+
+    private func undoOperation(_ operation: ArchiveOperation, service: ArchiveService) async throws {
+        try await service.undo(operation.id)
+        // A file the user moved back must stay where they put it, with its result still recorded.
+        try await service.markSettled([operation.source.path: operation.fingerprint], removing: [operation.destination.path])
+        try await service.moveRecords(from: operation.destination.path, to: operation.source.path)
     }
 
     func reorganizeEverything() async {
         guard let service, runTask == nil else { return }
         do {
             try await service.clearSettled()
+            fileActivity = []
+            selectedPath = nil
             state = await service.snapshot()
             organize()
         } catch { activity = .failed(error.localizedDescription) }

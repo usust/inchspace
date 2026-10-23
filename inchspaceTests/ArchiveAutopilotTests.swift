@@ -262,7 +262,12 @@ final class ArchiveAutopilotTests: XCTestCase {
         try Data(repeating: 7, count: 4_096).write(to: song)
         // Far below the file's size: keywords cannot be read, but the file must still be handled by its name.
         let service = try await f.service(maxFileBytes: 100)
-        let summary = try await f.autopilot(service, planner: .local).run()
+        var keywordsSeen: [String]?
+        let summary = try await f.autopilot(service, planner: f.planner(review: { request in
+            keywordsSeen = request.file.keywords
+            return ArchiveFileDecision(proposedName: request.file.source.lastPathComponent, folder: "music", belongsHere: false)
+        })).run()
+        XCTAssertEqual(keywordsSeen, [], "No keywords could be read, yet the file was still offered to the model by name.")
         XCTAssertEqual(summary.movedFiles, 1)
         XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("music/aori - song.mp3")))
     }
@@ -317,7 +322,10 @@ final class ArchiveAutopilotTests: XCTestCase {
         try FileManager.default.createDirectory(at: f.workspace.appendingPathComponent("Downloads/music/live"), withIntermediateDirectories: true)
         try Data("c".utf8).write(to: f.workspace.appendingPathComponent("Downloads/music/live/c.mp3"))
         let service = try await f.service()
-        let summary = try await f.autopilot(service, planner: .local).run()
+        let summary = try await f.autopilot(service, planner: f.planner(consolidate: { request in
+            XCTAssertEqual(request.folders.map(\.path).sorted(), ["Downloads", "Downloads/music", "Downloads/music/live", "音乐"])
+            return ArchiveConsolidationResponse(merges: [.init(keep: "音乐", merge: ["Downloads/music"], reason: "同为音乐")])
+        })).run()
         XCTAssertEqual(try String(contentsOf: f.workspace.appendingPathComponent("音乐/a.mp3"), encoding: .utf8), "kept")
         XCTAssertEqual(try String(contentsOf: f.workspace.appendingPathComponent("音乐/a (2).mp3"), encoding: .utf8), "other")
         XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("音乐/b.mp3")))
@@ -458,41 +466,89 @@ final class ArchiveAutopilotTests: XCTestCase {
 
     // MARK: Offline rules and reporting
 
-    func testLocalPlannerSortsByExistingFolderThenFileKind() async throws {
+    func testFilesAreReviewedInBatchesAndAppliedOneByOne() async throws {
         let f = try Fixture()
         defer { f.remove() }
         try FileManager.default.createDirectory(at: f.workspace.appendingPathComponent("Taxes"), withIntermediateDirectories: true)
-        let tax = try f.file("taxes-2025.pdf")
-        let photo = try f.file("holiday.jpg")
-        let otherPhoto = try f.file("beach.jpg")
-        let lonelyMovie = try f.file("clip.mov")
-        let unknown = try f.file("mystery.xyz")
-        let nested = f.workspace.appendingPathComponent("Taxes/old.pdf")
-        try Data("x".utf8).write(to: nested)
+        for name in ["a.pdf", "b.pdf", "c.pdf", "d.pdf", "e.pdf"] { _ = try f.file(name) }
         let service = try await f.service()
-        let summary = try await f.autopilot(service, planner: .local).run()
-        XCTAssertEqual(summary.renamedFiles, 0, "Offline sorting never renames.")
-        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("Taxes/taxes-2025.pdf")))
-        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("图片/holiday.jpg")))
-        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("图片/beach.jpg")))
-        XCTAssertFalse(ArchiveFileSystem.exists(tax))
-        XCTAssertFalse(ArchiveFileSystem.exists(photo))
-        XCTAssertFalse(ArchiveFileSystem.exists(otherPhoto))
-        XCTAssertTrue(ArchiveFileSystem.exists(lonelyMovie), "One file of a kind does not get its own folder.")
-        XCTAssertTrue(ArchiveFileSystem.exists(unknown), "Unknown types stay put.")
-        XCTAssertTrue(ArchiveFileSystem.exists(nested), "Files already in a subfolder are not reshuffled.")
+        var batches: [[String]] = []
+        var autopilot = ArchiveAutopilot(service: service, planner: ArchiveStagePlanner(
+            consolidate: { _ in ArchiveConsolidationResponse(merges: []) },
+            review: { batch in
+                batches.append(batch.files.map { $0.file.source.lastPathComponent })
+                XCTAssertEqual(batch.folders, ["Taxes"])
+                var decisions: [String: ArchiveFileDecision] = [:]
+                for review in batch.files {
+                    decisions[review.file.id] = ArchiveFileDecision(proposedName: review.file.source.lastPathComponent, topic: "税务",
+                                                                    folder: "Taxes", belongsHere: false, reason: "税单", summary: "一份税务文件")
+                }
+                return decisions
+            },
+            group: { _ in ArchiveGroupingResponse(summary: nil, groups: []) },
+            nest: { _ in ArchiveNestingResponse(summary: nil, groups: [], renames: []) }
+        ))
+        autopilot.stableWait = .milliseconds(10)
+        autopilot.reviewBatch = 2
+        let summary = try await autopilot.run()
+        XCTAssertEqual(batches.map(\.count), [2, 2, 1])
+        XCTAssertEqual(summary.movedFiles, 5)
+        let files = await service.snapshot().files
+        let record = try XCTUnwrap(files?[f.workspace.appendingPathComponent("Taxes/a.pdf").path])
+        XCTAssertEqual(record.summary, "一份税务文件")
+        XCTAssertEqual(record.previousFolder, "")
+        XCTAssertNotNil(record.createdSeconds)
+        XCTAssertNotNil(record.operationID)
+        let operations = await service.snapshot().operations
+        XCTAssertTrue(operations.contains { $0.id == record.operationID && $0.status == .complete })
     }
 
-    func testLocalPlannerSkipsTakenDestinationNames() async throws {
+    func testUnusableBatchAnswerIsSplitUntilTheConfusingFileIsIsolated() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        for name in ["one.txt", "two.txt", "three.txt", "four.txt"] { _ = try f.file(name) }
+        let service = try await f.service()
+        var asked: [[String]] = []
+        var autopilot = f.autopilot(service, planner: ArchiveStagePlanner(
+            consolidate: { _ in ArchiveConsolidationResponse(merges: []) },
+            review: { batch in
+                let names = batch.files.map { $0.file.source.lastPathComponent }
+                asked.append(names)
+                // Any batch containing the troublesome file comes back garbled.
+                if names.contains("three.txt") { throw ArchiveError("无效") }
+                var decisions: [String: ArchiveFileDecision] = [:]
+                for review in batch.files {
+                    decisions[review.file.id] = ArchiveFileDecision(proposedName: "ok-" + review.file.source.lastPathComponent, folder: review.folder)
+                }
+                return decisions
+            },
+            group: { _ in ArchiveGroupingResponse(summary: nil, groups: []) },
+            nest: { _ in ArchiveNestingResponse(summary: nil, groups: [], renames: []) }
+        ))
+        autopilot.reviewBatch = 4
+        let summary = try await autopilot.run()
+        XCTAssertEqual(summary.renamedFiles, 3)
+        XCTAssertEqual(summary.leftUntouched, 1)
+        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("three.txt")), "The isolated file stays as it is.")
+        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("ok-one.txt")))
+        XCTAssertEqual(asked.filter { $0 == ["three.txt"] }.count, 2, "A single file gets a second chance before being left alone.")
+        let record = await service.snapshot().files?[f.workspace.appendingPathComponent("three.txt").path]
+        XCTAssertEqual(record?.resolution, .unrecognized)
+    }
+
+    func testTakenDestinationNamesLeaveTheFileInPlace() async throws {
         let f = try Fixture()
         defer { f.remove() }
         try FileManager.default.createDirectory(at: f.workspace.appendingPathComponent("图片"), withIntermediateDirectories: true)
         try Data("old".utf8).write(to: f.workspace.appendingPathComponent("图片/a.jpg"))
         let clash = try f.file("a.jpg")
         let service = try await f.service()
-        let summary = try await f.autopilot(service, planner: .local).run()
+        let summary = try await f.autopilot(service, planner: f.planner(review: { request in
+            ArchiveFileDecision(proposedName: request.file.source.lastPathComponent, folder: "图片", belongsHere: false)
+        })).run()
         XCTAssertEqual(summary.movedFiles, 0)
         XCTAssertTrue(ArchiveFileSystem.exists(clash))
+        XCTAssertEqual(try String(contentsOf: f.workspace.appendingPathComponent("图片/a.jpg"), encoding: .utf8), "old")
     }
 
     func testReportsPerFileStatusThroughEachStep() async throws {
@@ -560,10 +616,15 @@ final class ArchiveAutopilotTests: XCTestCase {
                      review: (@MainActor (ArchiveFileReview) async throws -> ArchiveFileDecision)? = nil,
                      group: (@MainActor (ArchiveGroupingRequest) async throws -> ArchiveGroupingResponse)? = nil,
                      nest: (@MainActor (ArchiveNestingRequest) async throws -> ArchiveNestingResponse)? = nil) -> ArchiveStagePlanner {
-            ArchiveStagePlanner(
+            let perFile = review ?? { request in
+                ArchiveFileDecision(proposedName: request.file.source.lastPathComponent, folder: request.folder)
+            }
+            return ArchiveStagePlanner(
                 consolidate: consolidate ?? { _ in ArchiveConsolidationResponse(merges: []) },
-                review: review ?? { request in
-                    ArchiveFileDecision(proposedName: request.file.source.lastPathComponent, folder: request.folder)
+                review: { batch in
+                    var decisions: [String: ArchiveFileDecision] = [:]
+                    for request in batch.files { decisions[request.file.id] = try await perFile(request) }
+                    return decisions
                 },
                 group: group ?? { _ in ArchiveGroupingResponse(summary: nil, groups: []) },
                 nest: nest ?? { _ in ArchiveNestingResponse(summary: nil, groups: [], renames: []) }

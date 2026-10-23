@@ -87,7 +87,7 @@ nonisolated struct ArchiveAIResponse: Codable, Sendable {
     var files: [ArchiveAIFileRequest]
 }
 
-nonisolated struct ArchiveDirectoryOperation: Codable, Identifiable, Sendable {
+nonisolated struct ArchiveDirectoryOperation: Codable, Equatable, Identifiable, Sendable {
     var id = UUID()
     var action: ArchiveDirectoryActionKind
     var rootID: String
@@ -101,7 +101,7 @@ nonisolated struct ArchiveDirectoryOperation: Codable, Identifiable, Sendable {
     var source: URL?
 }
 
-nonisolated struct ArchiveAIPlan: Codable, Identifiable, Sendable {
+nonisolated struct ArchiveAIPlan: Codable, Equatable, Identifiable, Sendable {
     var id = UUID()
     var contextID: UUID
     var version: Int

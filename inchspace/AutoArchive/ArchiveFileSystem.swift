@@ -122,7 +122,12 @@ nonisolated enum ArchiveFileSystem {
     }
 
     /// Identity plus a content hash. The file is streamed, so size does not matter and nothing large is held in memory.
-    /// `maxBytes` only bounds reads that keep the content (`read`); hashing has no size limit.
+    /// `maxBytes` only bounds reads that keep the content (`read`); hashing has no size limit. Files above
+    /// `sampledHashThreshold` hash only their first and last `sampledHashChunk` bytes plus the size, so a
+    /// large video is identified in milliseconds instead of being read end to end.
+    static let sampledHashThreshold: Int64 = 64 << 20
+    static let sampledHashChunk = 4 << 20
+
     static func fingerprint(_ url: URL, maxBytes: Int = .max) throws -> ArchiveFingerprint {
         let parent = try openDirectory(url.deletingLastPathComponent())
         defer { close(parent) }
@@ -135,15 +140,28 @@ nonisolated enum ArchiveFileSystem {
         }
         var hasher = SHA256()
         var buffer = [UInt8](repeating: 0, count: 1 << 20)
-        while true {
-            try Task.checkCancellation()
-            let count = Darwin.read(fd, &buffer, buffer.count)
-            if count == 0 { break }
-            if count < 0 {
-                if errno == EINTR { continue }
-                throw posixError("读取文件失败")
+        func hash(upTo limit: Int) throws {
+            var remaining = limit
+            while remaining > 0 {
+                try Task.checkCancellation()
+                let count = Darwin.read(fd, &buffer, min(buffer.count, remaining))
+                if count == 0 { break }
+                if count < 0 {
+                    if errno == EINTR { continue }
+                    throw posixError("读取文件失败")
+                }
+                remaining -= count
+                buffer.withUnsafeBytes { hasher.update(bufferPointer: UnsafeRawBufferPointer(rebasing: $0.prefix(count))) }
             }
-            buffer.withUnsafeBytes { hasher.update(bufferPointer: UnsafeRawBufferPointer(rebasing: $0.prefix(count))) }
+        }
+        if before.st_size > sampledHashThreshold {
+            try hash(upTo: sampledHashChunk)
+            guard lseek(fd, before.st_size - Int64(sampledHashChunk), SEEK_SET) >= 0 else { throw posixError("读取文件失败") }
+            try hash(upTo: sampledHashChunk)
+            var size = before.st_size
+            withUnsafeBytes(of: &size) { hasher.update(bufferPointer: $0) }
+        } else {
+            try hash(upTo: .max)
         }
         var after = stat(), current = stat()
         guard fstat(fd, &after) == 0,
@@ -165,6 +183,24 @@ nonisolated enum ArchiveFileSystem {
         return ArchiveFingerprint(device: info.st_dev, inode: info.st_ino, size: info.st_size,
                                   modifiedSeconds: Int64(info.st_mtimespec.tv_sec),
                                   modifiedNanoseconds: Int64(info.st_mtimespec.tv_nsec), sha256: "")
+    }
+
+    /// Files up to this size are re-hashed whenever a move checks them; larger ones are checked by identity,
+    /// size and modification time, which is what the skip logic trusts anyway.
+    static let fullVerifyLimit: Int64 = 8 << 20
+
+    /// True when the file at `url` is still the one `expected` describes.
+    static func matches(_ url: URL, _ expected: ArchiveFingerprint, maxBytes: Int = .max) -> Bool {
+        guard let quick = try? quickFingerprint(url), quick.sameMetadata(expected) else { return false }
+        guard quick.size <= fullVerifyLimit, !expected.sha256.isEmpty else { return true }
+        return (try? fingerprint(url, maxBytes: maxBytes)) == expected
+    }
+
+    /// The file's birth time, when the volume records one.
+    static func creationSeconds(_ url: URL) -> Int64? {
+        var info = stat()
+        guard lstat(url.path, &info) == 0, info.st_birthtimespec.tv_sec > 0 else { return nil }
+        return Int64(info.st_birthtimespec.tv_sec)
     }
 
     private static func sameStat(_ a: stat, _ b: stat) -> Bool {
@@ -259,7 +295,7 @@ nonisolated enum ArchiveFileSystem {
 
     static func validateMove(source: URL, target: URL, expected: ArchiveFingerprint, maxBytes: Int) throws {
         guard source != target else { throw ArchiveError("文件名和位置均无变化，无需执行。") }
-        guard try fingerprint(source, maxBytes: maxBytes) == expected else { throw ArchiveError("源文件已变化，请重新生成建议。") }
+        guard matches(source, expected, maxBytes: maxBytes) else { throw ArchiveError("源文件已变化，请重新生成建议。") }
         try checkCollision(target, ignoring: source)
         let fd = try openDirectory(target.deletingLastPathComponent())
         defer { close(fd) }
@@ -279,7 +315,7 @@ nonisolated enum ArchiveFileSystem {
         try renameExclusive(sfd, source.lastPathComponent, sfd, staging.lastPathComponent)
         _ = fsync(sfd)
         // If a replacement was captured, preserve it at the recorded staging path for review.
-        guard try fingerprint(staging, maxBytes: maxBytes) == expected else {
+        guard matches(staging, expected, maxBytes: maxBytes) else {
             throw ArchiveError("移动前源文件被替换，已保留暂存文件：\(staging.path)")
         }
         do {
@@ -295,7 +331,7 @@ nonisolated enum ArchiveFileSystem {
         }
         _ = fsync(sfd)
         _ = fsync(tfd)
-        guard try fingerprint(target, maxBytes: maxBytes) == expected else {
+        guard matches(target, expected, maxBytes: maxBytes) else {
             throw ArchiveError("提交后检测到文件变化，请检查操作记录。")
         }
     }

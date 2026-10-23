@@ -413,7 +413,7 @@ extension ArchiveService {
         for operation in plan.files {
             try ArchiveFileSystem.check(operation.source, role: operation.sourceRole ?? .inbox, config: config)
             try verifyAIParent(operation.source.deletingLastPathComponent(), context: context, running: nil, config: config)
-            guard try ArchiveFileSystem.fingerprint(operation.source, maxBytes: config.maxFileBytes) == operation.fingerprint else {
+            guard ArchiveFileSystem.matches(operation.source, operation.fingerprint, maxBytes: config.maxFileBytes) else {
                 throw ArchiveError("待归档文件已变化，请重新规划。")
             }
             guard !state.operations.contains(where: { $0.source == operation.source && [.planned, .undoPlanned, .needsReview].contains($0.status) }) else {
@@ -474,6 +474,7 @@ extension ArchiveService {
                 // A file's result is saved in the same commit that confirms its move, so the two never disagree.
                 if operation.status == .complete, var record = plan.records?[operation.source.path] {
                     record.path = operation.destination.path
+                    record.operationID = operation.id
                     var files = next.files ?? [:]
                     files.removeValue(forKey: operation.source.path)
                     files[record.path] = record
@@ -482,7 +483,8 @@ extension ArchiveService {
             }
         }
         if let (from, to) = rekey { Self.rekey(&next, from: from, to: to) }
-        if invalidateLearning { invalidateAIAndSuggestions(&next); next.rules = []; next.report = nil; next.cache = [:] }
+        // Keyword caches stay: they are checked against the file's fingerprint and save a PDF or Word parse later.
+        if invalidateLearning { invalidateAIAndSuggestions(&next); next.rules = []; next.report = nil }
         try commit(next)
     }
 

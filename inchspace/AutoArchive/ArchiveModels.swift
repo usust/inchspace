@@ -58,7 +58,7 @@ nonisolated struct ArchiveEvidence: Codable, Equatable, Sendable {
     var extractionNote: String?
 }
 
-nonisolated struct ArchiveRule: Codable, Identifiable, Sendable {
+nonisolated struct ArchiveRule: Codable, Equatable, Identifiable, Sendable {
     var id: String { directory.path }
     var directory: URL
     var aliases: [String]
@@ -73,7 +73,7 @@ nonisolated enum ArchiveSuggestionStatus: String, Codable, Sendable {
     case pending, skipped, stale, applied
 }
 
-nonisolated struct ArchiveSuggestion: Codable, Identifiable, Sendable {
+nonisolated struct ArchiveSuggestion: Codable, Equatable, Identifiable, Sendable {
     var id = UUID()
     var source: URL
     var fingerprint: ArchiveFingerprint
@@ -118,7 +118,7 @@ nonisolated enum ArchiveOperationStatus: String, Codable, Sendable {
     }
 }
 
-nonisolated struct ArchiveOperation: Codable, Identifiable, Sendable {
+nonisolated struct ArchiveOperation: Codable, Equatable, Identifiable, Sendable {
     var id = UUID()
     var suggestionID: UUID
     var source: URL
@@ -135,7 +135,7 @@ nonisolated struct ArchiveOperation: Codable, Identifiable, Sendable {
     var sourceRole: ArchiveFolderRole?
 }
 
-nonisolated struct ArchiveObservation: Codable, Sendable {
+nonisolated struct ArchiveObservation: Codable, Equatable, Sendable {
     var fingerprint: ArchiveFingerprint
     var firstSeen: Date
 }
@@ -187,8 +187,21 @@ nonisolated struct ArchiveFileRecord: Codable, Equatable, Sendable {
     var suggestedName: String?
     /// Reviewed as not belonging to the folder it is in; it joins the loose files when grouping.
     var misplaced: Bool?
+    /// One sentence on what the file is, from the model.
+    var summary: String?
+    /// The file's creation time (birth time), seconds since 1970; nil when the volume does not report one.
+    var createdSeconds: Int64?
+    /// The folder the file was in before autopilot moved it, relative to the workspace; nil when it never moved.
+    var previousFolder: String?
+    /// The journal entry that moved or renamed the file, so that one change can be undone on its own.
+    var operationID: UUID?
 
     var isResolved: Bool { (resolution ?? .organized) == .organized }
+    var createdAt: Date? { createdSeconds.map { Date(timeIntervalSince1970: TimeInterval($0)) } }
+    var modifiedAt: Date { Date(timeIntervalSince1970: TimeInterval(fingerprint.modifiedSeconds)) }
+    var size: Int64 { fingerprint.size }
+    var name: String { (path as NSString).lastPathComponent }
+    var wasRenamed: Bool { renamed && name != originalName }
 
     /// Whether a run should look at this unchanged file again.
     func needsReview(structure current: String) -> Bool {

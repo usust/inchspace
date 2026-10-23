@@ -118,6 +118,9 @@ struct ArchiveAutopilot {
     var maxDepth = 4
     /// Pause after each model request; gives a local GPU a breather between batches.
     var cooldown: Duration = .zero
+    /// Songs, videos, installers and very large files are put into a folder for their type without asking
+    /// the model (see `ArchiveFileKind`).
+    var sortsByType = false
     /// Receives per-file status changes as the run moves through each batch.
     var report: @MainActor ([ArchiveFileActivity]) -> Void = { _ in }
 
@@ -125,12 +128,20 @@ struct ArchiveAutopilot {
         var summary = ArchiveRunSummary()
         var status = ArchiveRunProgress()
         let start = Date()
-        let consolidated = try await consolidateFolders(&summary, &status, progress)
-        try await reviewFiles(&summary, &status, progress)
-        // Grouping waits until every new file has been reviewed, so related files are seen together.
-        if !summary.hasMore {
-            let changed = try await groupFiles(&summary, &status, progress)
-            try await nestFolders(changed, &summary, &status, progress)
+        let consolidated: Bool
+        do {
+            consolidated = try await consolidateFolders(&summary, &status, progress)
+            try await reviewFiles(&summary, &status, progress)
+            // Grouping waits until every new file has been reviewed, so related files are seen together.
+            if !summary.hasMore {
+                let changed = try await groupFiles(&summary, &status, progress)
+                try await nestFolders(changed, &summary, &status, progress)
+            }
+        } catch {
+            // Stamp what this run did settle even when it stops early; otherwise every unresolved file would be
+            // offered again first next time, and an interrupted run would keep circling the same files.
+            try? await service.stampUnresolved(since: start)
+            throw error
         }
         // Unresolved files are skipped until the layout differs from what they were last checked against.
         try await service.stampUnresolved(since: start)
@@ -322,9 +333,22 @@ struct ArchiveAutopilot {
             guard let root = Self.workspace(context) else { return }
             let rootID = root.id.uuidString
             let folders = context.directories.filter { $0.rootID == rootID && !$0.relativePath.isEmpty }.map(\.relativePath).sorted()
+            var reviewed = context.files
+            if sortsByType {
+                let typed = reviewed.compactMap { file in ArchiveFileKind.of(name: file.source.lastPathComponent, size: file.fingerprint.size).map { (file, $0) } }
+                if !typed.isEmpty {
+                    let paths = Set(typed.map(\.0.source.path))
+                    reviewed.removeAll { paths.contains($0.source.path) }
+                    do { try await placeByType(typed, &summary, &status, progress) }
+                    catch {
+                        report(reviewed.map { ArchiveFileActivity(path: $0.source.path, status: .queued, detail: "已停止，下次继续") })
+                        throw error
+                    }
+                }
+            }
             let step = max(1, reviewBatch)
-            for start in stride(from: 0, to: context.files.count, by: step) {
-                let chunk = Array(context.files[start..<min(start + step, context.files.count)])
+            for start in stride(from: 0, to: reviewed.count, by: step) {
+                let chunk = Array(reviewed[start..<min(start + step, reviewed.count)])
                 // One question for the whole chunk; the answers are then checked and applied file by file,
                 // each against a fresh snapshot, so a move never relies on stale folder knowledge.
                 let reviews = chunk.map { file in
@@ -341,11 +365,11 @@ struct ArchiveAutopilot {
                 do {
                     decisions = try await decide(reviews, folders: folders)
                 } catch is CancellationError {
-                    report(context.files[start...].map { ArchiveFileActivity(path: $0.source.path, status: .queued, detail: "已停止，下次继续") })
+                    report(reviewed[start...].map { ArchiveFileActivity(path: $0.source.path, status: .queued, detail: "已停止，下次继续") })
                     throw CancellationError()
                 } catch {
                     report(chunk.map { ArchiveFileActivity(path: $0.source.path, status: .failed, detail: error.localizedDescription) })
-                    report(context.files[min(start + step, context.files.count)...].map {
+                    report(reviewed[min(start + step, reviewed.count)...].map {
                         ArchiveFileActivity(path: $0.source.path, status: .queued, detail: "下次继续")
                     })
                     throw error
@@ -356,14 +380,14 @@ struct ArchiveAutopilot {
                         try await apply(decisions[file.id], to: file, &summary, &status, progress)
                     } catch is CancellationError {
                         report(chunk[index...].map { ArchiveFileActivity(path: $0.source.path, status: .queued, detail: "已停止，下次继续") })
-                        report(context.files[min(start + step, context.files.count)...].map {
+                        report(reviewed[min(start + step, reviewed.count)...].map {
                             ArchiveFileActivity(path: $0.source.path, status: .queued, detail: "已停止，下次继续")
                         })
                         throw CancellationError()
                     } catch {
                         report([ArchiveFileActivity(path: file.source.path, status: .failed, detail: error.localizedDescription)])
                         report(chunk[(index + 1)...].map { ArchiveFileActivity(path: $0.source.path, status: .queued, detail: "下次继续") })
-                        report(context.files[min(start + step, context.files.count)...].map {
+                        report(reviewed[min(start + step, reviewed.count)...].map {
                             ArchiveFileActivity(path: $0.source.path, status: .queued, detail: "下次继续")
                         })
                         throw error
@@ -520,6 +544,141 @@ struct ArchiveAutopilot {
         report([ArchiveFileActivity(path: path, status: .completed,
                                     detail: Self.describe(record, movedTo: target != folder ? (target as NSString).lastPathComponent : nil),
                                     record: record)])
+    }
+
+    // MARK: Step 1a – files sorted by type alone
+
+    /// Files whose type says enough (`ArchiveFileKind`). One stays where it is when its folder is already one for
+    /// its type: the folder or a parent has a matching name, or most files next to it are of the same type. A
+    /// very large file stays in any subfolder, since it is likely part of what is there. Every other one goes to
+    /// the type's folder: an existing one with a matching name near the top, or a new one in the workspace. No
+    /// model request, no content read; the moves go through the same checked, undoable plans as everything else.
+    private func placeByType(_ files: [(ArchiveAIFile, ArchiveFileKind)], _ summary: inout ArchiveRunSummary,
+                             _ status: inout ArchiveRunProgress, _ progress: Progress) async throws {
+        let context = try await service.prepareContext(paths: [])
+        guard let root = Self.workspace(context) else { return }
+        let rootID = root.id.uuidString
+        let folders = context.directories.filter { $0.rootID == rootID && !$0.relativePath.isEmpty }.map(\.relativePath)
+        status.phase = .reviewing
+        status.directory = "按类型归类 \(files.count) 个文件"
+        status.batchFiles = files.count
+        progress(status)
+        report(files.map { ArchiveFileActivity(path: $0.0.source.path, status: .processing, detail: "按文件类型归类") })
+
+        var majority: [String: ArchiveFileKind?] = [:]
+        func mostlyOfKind(_ folder: URL) -> ArchiveFileKind? {
+            if let known = majority[folder.path] { return known }
+            let entries = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+                                                                         options: [.skipsHiddenFiles])) ?? []
+            var counts: [ArchiveFileKind: Int] = [:]
+            var total = 0
+            for entry in entries {
+                guard let values = try? entry.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]), values.isRegularFile == true else { continue }
+                total += 1
+                if let kind = ArchiveFileKind.of(name: entry.lastPathComponent, size: Int64(values.fileSize ?? 0)) { counts[kind, default: 0] += 1 }
+            }
+            let top = counts.max { $0.value < $1.value }
+            let result = top.flatMap { $0.value * 2 > total ? $0.key : nil }
+            majority[folder.path] = result
+            return result
+        }
+        func destination(for kind: ArchiveFileKind) -> String {
+            folders.filter { Self.depth($0) <= 2 && kind.matches(folderName: ($0 as NSString).lastPathComponent) }
+                .min { (Self.depth($0), $0) < (Self.depth($1), $1) } ?? kind.folderName
+        }
+
+        var stays: [ArchiveFileRecord] = []
+        var moves: [(file: ArchiveAIFile, kind: ArchiveFileKind, target: String)] = []
+        for (file, kind) in files {
+            let folder = (file.relativePath as NSString).deletingLastPathComponent
+            var record = ArchiveFileRecord(path: file.source.path, fingerprint: file.fingerprint, originalName: file.source.lastPathComponent,
+                                           topic: kind.topic, renamed: false, reason: "", stage: .grouped)
+            record.summary = "\(kind.topic)文件，按类型归类，未发送给 AI"
+            record.createdSeconds = ArchiveFileSystem.creationSeconds(file.source)
+            record.resolution = .organized
+            record.structure = context.structure
+            let inPlace = !folder.isEmpty && (kind == .large
+                || folder.split(separator: "/").contains { kind.matches(folderName: String($0)) }
+                || mostlyOfKind(file.source.deletingLastPathComponent()) == kind)
+            let target = destination(for: kind)
+            if inPlace || target == folder {
+                record.reason = "所在文件夹已是\(kind.topic)类，保持不变"
+                stays.append(record)
+            } else if Self.isTaken(file.source.lastPathComponent, in: root.url.appendingPathComponent(target, isDirectory: true), by: file.source) {
+                record.reason = "「\(target)」中已有同名文件，留在原处"
+                record.resolution = .unplaced
+                stays.append(record)
+            } else {
+                moves.append((file, kind, target))
+            }
+        }
+        try await service.saveFileRecords(stays)
+        report(stays.map { ArchiveFileActivity(path: $0.path, status: Self.activity(for: $0), detail: Self.describe($0), record: $0) })
+        status.processedFiles += stays.count
+        status.remainingFiles = max(0, status.remainingFiles - stays.count)
+        progress(status)
+
+        // The service accepts at most 30 file moves per plan; each slice gets a fresh snapshot.
+        for start in stride(from: 0, to: moves.count, by: 30) {
+            let slice = moves[start..<min(start + 30, moves.count)]
+            let fresh: ArchiveAIContext
+            do {
+                try Task.checkCancellation()
+                fresh = try await service.prepareContext(paths: slice.map(\.file.source.path))
+            } catch {
+                report(moves[start...].map { ArchiveFileActivity(path: $0.file.source.path, status: .queued, detail: "已停止，下次继续") })
+                throw error
+            }
+            var directories: [ArchiveAIDirectoryRequest] = []
+            var requests: [ArchiveAIFileRequest] = []
+            var records: [String: ArchiveFileRecord] = [:]
+            for item in slice {
+                guard let file = fresh.files.first(where: { $0.source.path == item.file.source.path }) else { continue }
+                let reason = "\(item.kind.topic)文件按类型放进「\(item.target)」"
+                if !fresh.directories.contains(where: { $0.rootID == rootID && $0.relativePath == item.target }),
+                   !directories.contains(where: { $0.relativePath == item.target }) {
+                    directories.append(ArchiveAIDirectoryRequest(action: .create, rootID: rootID, relativePath: item.target, reason: reason))
+                }
+                var record = ArchiveFileRecord(path: file.source.path, fingerprint: file.fingerprint, originalName: file.source.lastPathComponent,
+                                               topic: item.kind.topic, renamed: false, reason: reason, stage: .grouped)
+                record.summary = "\(item.kind.topic)文件，按类型归类，未发送给 AI"
+                record.createdSeconds = ArchiveFileSystem.creationSeconds(file.source)
+                record.resolution = .organized
+                record.previousFolder = (file.relativePath as NSString).deletingLastPathComponent
+                records[file.source.path] = record
+                requests.append(ArchiveAIFileRequest(fileID: file.id, rootID: file.rootID, relativeDirectory: item.target,
+                                                     reason: reason, proposedName: file.source.lastPathComponent))
+            }
+            guard !requests.isEmpty else { continue }
+            status.phase = .applying
+            progress(status)
+            let plan: ArchiveAIPlan
+            do {
+                plan = try await service.previewAI(ArchiveAIResponse(summary: "按文件类型归类", directories: directories, files: requests),
+                                                   contextID: fresh.id, records: records)
+            } catch is ArchiveError {
+                report(slice.map { ArchiveFileActivity(path: $0.file.source.path, status: .queued, detail: "更改未通过安全检查，下次重新处理") })
+                continue
+            }
+            let applied = try await service.applyAI(plan.id)
+            guard applied.status == .complete else {
+                throw ArchiveNeedsReview(applied.error ?? "部分文件未能确认移动，请在“整理记录”中核对。")
+            }
+            let moved = applied.files.filter { $0.status == .complete }
+            summary.movedFiles += moved.count
+            summary.createdDirectories += applied.directories.filter { $0.action == .create && $0.status == .complete }.count
+            summary.batchIDs.append(applied.id)
+            for operation in moved {
+                var record = records[operation.source.path]
+                record?.path = operation.destination.path
+                record?.operationID = operation.id
+                report([ArchiveFileActivity(path: operation.source.path, status: .completed,
+                                            detail: "已按类型归入「\(operation.destination.deletingLastPathComponent().lastPathComponent)」", record: record)])
+            }
+            status.processedFiles += slice.count
+            status.remainingFiles = max(0, status.remainingFiles - slice.count)
+            progress(status)
+        }
     }
 
     // MARK: Step 2 – files into folders

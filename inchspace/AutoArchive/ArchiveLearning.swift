@@ -30,7 +30,15 @@ nonisolated enum ArchiveLearning {
     static let textPrefixLimit = 6_000
     static let pdfPageLimit = 8
 
+    static let readableExtensions: Set<String> = ["txt", "md", "csv", "rst", "json", "log", "pdf", "docx"]
+
     static func extract(_ file: ArchiveEvidence, maxBytes: Int) throws -> ArchiveEvidence {
+        // Only the name says anything about a song, a video or an installer: never read their bytes.
+        guard readableExtensions.contains(file.url.pathExtension.lowercased()) else {
+            return ArchiveEvidence(url: file.url, fingerprint: file.fingerprint,
+                                   words: tokens(file.url.deletingPathExtension().lastPathComponent).sorted(),
+                                   extractionNote: "此格式仅使用文件名匹配。")
+        }
         let (fingerprint, data) = try ArchiveFileSystem.read(file.url, maxBytes: maxBytes)
         guard fingerprint == file.fingerprint else { throw ArchiveError("文件已变化，请重新扫描。") }
         var text = ""

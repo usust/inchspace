@@ -41,6 +41,11 @@ extension ArchiveService {
             for (path, record) in next.files ?? [:] where !scanned.contains(path) {
                 orphaned[record.fingerprint.identityKey] = path
             }
+            // Each round takes only the first few eligible files, so the order decides who waits: in plain path
+            // order one large folder (hundreds of songs under `A…/Music`) would hold every other folder back for
+            // many runs. Files never seen before go first, then the ones looked at again; within each, folders
+            // take turns.
+            candidates = Self.fairOrder(candidates, known: Set((next.files ?? [:]).keys))
             for file in candidates {
                 try Task.checkCancellation()
                 let path = file.url.path
@@ -116,6 +121,30 @@ extension ArchiveService {
             aiPreview = nil
             return context
         }
+    }
+
+    /// New files before known ones, and within each, one file per folder in turn (folders in path order).
+    nonisolated static func fairOrder(_ files: [ArchiveEvidence], known: Set<String>) -> [ArchiveEvidence] {
+        func interleave(_ files: [ArchiveEvidence]) -> [ArchiveEvidence] {
+            var folders: [String] = []
+            var byFolder: [String: [ArchiveEvidence]] = [:]
+            for file in files {
+                let folder = file.url.deletingLastPathComponent().path
+                if byFolder[folder] == nil { folders.append(folder) }
+                byFolder[folder, default: []].append(file)
+            }
+            var result: [ArchiveEvidence] = []
+            result.reserveCapacity(files.count)
+            var index = 0
+            while result.count < files.count {
+                for folder in folders where index < byFolder[folder]!.count { result.append(byFolder[folder]![index]) }
+                index += 1
+            }
+            return result
+        }
+        let fresh = files.filter { !known.contains($0.url.path) }
+        let seen = files.filter { known.contains($0.url.path) }
+        return interleave(fresh) + interleave(seen)
     }
 
     /// Legacy bookkeeping from before per-file records; kept so older journals still load. It no longer

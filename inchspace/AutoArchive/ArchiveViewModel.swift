@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import UniformTypeIdentifiers
 
 enum ArchiveScreen: Equatable {
     case loading, onboarding, dashboard
@@ -18,11 +19,12 @@ enum ArchiveActivity: Equatable {
 
 /// Which rows of the file list are shown.
 enum ArchiveEntryFilter: String, CaseIterable, Identifiable {
-    case all, moved, renamed, unplaced, failed
+    case all, live, moved, renamed, unplaced, failed
     var id: String { rawValue }
     var title: String {
         switch self {
         case .all: "全部"
+        case .live: "本次"
         case .moved: "已移动"
         case .renamed: "已改名"
         case .unplaced: "未归位"
@@ -71,6 +73,86 @@ struct ArchiveFileEntry: Identifiable, Equatable {
     var isRenamed: Bool { record?.wasRenamed == true }
 }
 
+/// How the files under one folder stand, counted over every file below it, for the folder's badge.
+struct ArchiveFolderStats: Equatable {
+    var processing = 0
+    var waiting = 0
+    var completed = 0
+    var unplaced = 0
+    var failed = 0
+
+    var total: Int { processing + waiting + completed + unplaced + failed }
+
+    mutating func add(_ status: ArchiveFileActivity.Status) {
+        switch status {
+        case .processing: processing += 1
+        case .queued: waiting += 1
+        case .completed: completed += 1
+        case .unplaced: unplaced += 1
+        case .skipped, .failed: failed += 1
+        }
+    }
+
+    /// The one status a folder icon shows: work in progress first, then problems, then done.
+    var headline: ArchiveFileActivity.Status? {
+        if processing > 0 { return .processing }
+        if failed > 0 { return .failed }
+        if unplaced > 0 { return .unplaced }
+        if waiting > 0 { return .queued }
+        return completed > 0 ? .completed : nil
+    }
+
+    var summary: String {
+        var parts: [String] = []
+        if processing > 0 { parts.append("\(processing) 个处理中") }
+        if waiting > 0 { parts.append("\(waiting) 个等待") }
+        if failed > 0 { parts.append("\(failed) 个失败") }
+        if unplaced > 0 { parts.append("\(unplaced) 个未归位") }
+        if completed > 0 { parts.append("\(completed) 个已整理") }
+        return parts.joined(separator: " · ")
+    }
+}
+
+/// One file or folder in the browser: what is on disk now, plus what autopilot knows about it.
+struct ArchiveBrowserItem: Identifiable, Equatable {
+    var id: String { path }
+    var path: String
+    var name: String
+    var isDirectory: Bool
+    var size: Int64?
+    var modified: Date?
+    /// Finder's "Kind" text, such as "MP3 音频".
+    var kind: String
+    var entry: ArchiveFileEntry?
+    var stats: ArchiveFolderStats?
+    /// Folder relative to the workspace, shown in search results where files come from many folders.
+    var folder: String
+
+    var url: URL { URL(fileURLWithPath: path, isDirectory: isDirectory) }
+    /// The status the icon badge shows; nil for a file autopilot has not looked at yet.
+    var status: ArchiveFileActivity.Status? { isDirectory ? stats?.headline : entry?.status }
+
+    // Sort keys for the table columns.
+    var sortSize: Int64 { isDirectory ? -1 : size ?? 0 }
+    var sortModified: Date { modified ?? .distantPast }
+    var sortKind: String { isDirectory ? "" : kind }
+    var sortStatus: Int {
+        switch status {
+        case .processing: 0
+        case .queued: 1
+        case .failed, .skipped: 2
+        case .unplaced: 3
+        case .completed: 4
+        case nil: 5
+        }
+    }
+    var sortTopic: String { entry?.topic ?? "" }
+}
+
+enum ArchiveBrowserLayout: String {
+    case list, icons
+}
+
 @MainActor
 final class ArchiveViewModel: ObservableObject {
     static let shared = ArchiveViewModel()
@@ -79,6 +161,7 @@ final class ArchiveViewModel: ObservableObject {
         static let consent = "archive.autopilot.aiConsent"
         static let onboarded = "archive.autopilot.onboarded"
         static let watching = "archive.autopilot.watching"
+        static let layout = "archive.browser.layout"
     }
 
     @Published private(set) var state = ArchiveState() { didSet { rebuildEntries() } }
@@ -99,6 +182,22 @@ final class ArchiveViewModel: ObservableObject {
     @Published var filter: ArchiveEntryFilter = .all
     @Published var searchText = ""
     @Published var selectedPath: String?
+    /// The folder the browser shows, relative to the workspace; empty for the workspace itself.
+    @Published private(set) var browserFolder = ""
+    /// What is in `browserFolder` right now, read from disk.
+    @Published private(set) var browserItems: [ArchiveBrowserItem] = []
+    @Published var browserLayout: ArchiveBrowserLayout = .list {
+        didSet { defaults.set(browserLayout.rawValue, forKey: Keys.layout) }
+    }
+    private(set) var canGoBack = false
+    private(set) var canGoForward = false
+    /// Every file with a result, by current path; `entries` is the same, ordered and capped for lists.
+    private var entryIndex: [String: ArchiveFileEntry] = [:]
+    /// Status counts for every folder that holds files with a result, by absolute path.
+    private var folderStats: [String: ArchiveFolderStats] = [:]
+    private var backStack: [String] = []
+    private var forwardStack: [String] = []
+    private var listingTask: Task<Void, Never>?
 
     private let defaults: UserDefaults
     private var service: ArchiveService?
@@ -108,7 +207,10 @@ final class ArchiveViewModel: ObservableObject {
     private var rerunRequested = false
     private lazy var watcher = ArchiveFolderWatcher { [weak self] in self?.folderChanged() }
 
-    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        browserLayout = defaults.string(forKey: Keys.layout).flatMap(ArchiveBrowserLayout.init(rawValue:)) ?? .list
+    }
 
     var workspace: ArchiveFolder? { state.configuration.folders.first { $0.role == .workspace } }
     var isOnboarded: Bool { defaults.bool(forKey: Keys.onboarded) || defaults.bool(forKey: Keys.consent) }
@@ -193,6 +295,9 @@ final class ArchiveViewModel: ObservableObject {
             try await service.configure(ArchiveConfiguration(folders: [folder]))
             fileActivity = []
             selectedPath = nil
+            backStack = []
+            forwardStack = []
+            navigate(to: "")
             state = await service.snapshot()
             activity = .idle
             lastSummary = nil
@@ -241,6 +346,7 @@ final class ArchiveViewModel: ObservableObject {
             autopilot.keywordLimit = tuning.keywordLimit
             autopilot.siblingLimit = tuning.siblingLimit
             autopilot.cooldown = .milliseconds(Int(tuning.cooldown * 1_000))
+            autopilot.sortsByType = true
             autopilot.report = { [weak self] updates in self?.record(updates) }
             var failure: String?
             var summary: ArchiveRunSummary?
@@ -251,6 +357,7 @@ final class ArchiveViewModel: ObservableObject {
                     self.activity = .working(self.title(for: progress))
                 }
             } catch is CancellationError {
+            } catch let error as URLError where error.code == .cancelled {
             } catch { failure = error.localizedDescription }
             await self?.finishRun(summary: summary, failure: failure)
         }
@@ -326,10 +433,24 @@ final class ArchiveViewModel: ObservableObject {
             return lhs.updatedAt != rhs.updatedAt ? lhs.updatedAt > rhs.updatedAt : lhs.path < rhs.path
         }
         entries = Array(list.prefix(Self.entryLimit))
-        if let selectedPath, !entries.contains(where: { $0.path == selectedPath }) {
-            // The selected file moved: follow it to its new path when the record went along.
-            self.selectedPath = entries.first { $0.record?.originalName == (selectedPath as NSString).lastPathComponent && $0.isLive }?.path
+        entryIndex = byPath
+        var stats: [String: ArchiveFolderStats] = [:]
+        if !root.isEmpty {
+            for entry in byPath.values where entry.path.hasPrefix(root + "/") {
+                var folder = (entry.path as NSString).deletingLastPathComponent
+                while folder.count >= root.count {
+                    stats[folder, default: ArchiveFolderStats()].add(entry.status)
+                    if folder == root { break }
+                    folder = (folder as NSString).deletingLastPathComponent
+                }
+            }
         }
+        folderStats = stats
+        if let selectedPath, byPath[selectedPath] == nil, !ArchiveFileSystem.exists(URL(fileURLWithPath: selectedPath)) {
+            // The selected file moved: follow it to its new path when the record went along.
+            self.selectedPath = list.first { $0.record?.originalName == (selectedPath as NSString).lastPathComponent && $0.isLive }?.path
+        }
+        scheduleListing()
     }
 
     var filteredEntries: [ArchiveFileEntry] {
@@ -337,6 +458,7 @@ final class ArchiveViewModel: ObservableObject {
         return entries.filter { entry in
             switch filter {
             case .all: break
+            case .live: guard entry.isLive else { return false }
             case .moved: guard entry.isMoved else { return false }
             case .renamed: guard entry.isRenamed else { return false }
             case .unplaced: guard entry.status == .unplaced else { return false }
@@ -349,7 +471,137 @@ final class ArchiveViewModel: ObservableObject {
         }
     }
 
-    var selectedEntry: ArchiveFileEntry? { selectedPath.flatMap { path in entries.first { $0.path == path } } }
+    var selectedEntry: ArchiveFileEntry? { selectedPath.flatMap { entryIndex[$0] } }
+
+    /// The selected file or folder as the browser shows it, also when autopilot has no result for it.
+    var selectedItem: ArchiveBrowserItem? {
+        guard let selectedPath else { return nil }
+        return browserItems.first { $0.path == selectedPath } ?? entryIndex[selectedPath].map(item(for:))
+    }
+
+    // MARK: Browser
+
+    /// True while the browser shows one folder; a filter or a search lists matching files from everywhere.
+    var isBrowsing: Bool { filter == .all && searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    /// Search and filter results as browser rows.
+    var resultItems: [ArchiveBrowserItem] { filteredEntries.map(item(for:)) }
+
+    /// The folder's path from the workspace down, for the path bar: (name, relative path).
+    var browserTrail: [(name: String, folder: String)] {
+        var trail = [(name: workspace?.url.lastPathComponent ?? "整理目录", folder: "")]
+        var path = ""
+        for component in browserFolder.split(separator: "/") {
+            path = path.isEmpty ? String(component) : path + "/" + component
+            trail.append((String(component), path))
+        }
+        return trail
+    }
+
+    /// Status counts for the folder on screen.
+    var browserFolderStats: ArchiveFolderStats? { browserFolderURL.flatMap { folderStats[$0.path] } }
+
+    private var browserFolderURL: URL? {
+        guard let root = workspace?.url else { return nil }
+        return browserFolder.isEmpty ? root : root.appendingPathComponent(browserFolder, isDirectory: true)
+    }
+
+    func open(_ item: ArchiveBrowserItem) {
+        if item.isDirectory, let root = workspace?.url.path, item.path.hasPrefix(root) {
+            filter = .all
+            searchText = ""
+            showFolder(String(item.path.dropFirst(root.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+        } else {
+            NSWorkspace.shared.open(item.url)
+        }
+    }
+
+    func showFolder(_ folder: String) {
+        guard folder != browserFolder else { return }
+        backStack.append(browserFolder)
+        forwardStack.removeAll()
+        navigate(to: folder)
+    }
+
+    func goBack() {
+        guard let folder = backStack.popLast() else { return }
+        forwardStack.append(browserFolder)
+        navigate(to: folder)
+    }
+
+    func goForward() {
+        guard let folder = forwardStack.popLast() else { return }
+        backStack.append(browserFolder)
+        navigate(to: folder)
+    }
+
+    func goUp() {
+        guard !browserFolder.isEmpty else { return }
+        showFolder((browserFolder as NSString).deletingLastPathComponent)
+    }
+
+    /// Shows the folder holding a file and selects the file, from a search result.
+    func showInBrowser(_ item: ArchiveBrowserItem) {
+        filter = .all
+        searchText = ""
+        showFolder(item.folder)
+        selectedPath = item.path
+    }
+
+    private func navigate(to folder: String) {
+        browserFolder = folder
+        canGoBack = !backStack.isEmpty
+        canGoForward = !forwardStack.isEmpty
+        selectedPath = nil
+        browserItems = []
+        scheduleListing(immediately: true)
+    }
+
+    /// Reads the folder again shortly after results change; a run reports many files a second, and one read
+    /// covers them all.
+    private func scheduleListing(immediately: Bool = false) {
+        guard let url = browserFolderURL else { return }
+        listingTask?.cancel()
+        listingTask = Task { [weak self] in
+            if !immediately { try? await Task.sleep(for: .milliseconds(300)) }
+            guard !Task.isCancelled else { return }
+            let listing = await Task.detached(priority: .userInitiated) { Self.list(url) }.value
+            guard !Task.isCancelled, let self else { return }
+            guard let listing else {
+                // The folder is gone (moved or merged by the run): fall back to the nearest one that exists.
+                if !self.browserFolder.isEmpty { self.navigate(to: (self.browserFolder as NSString).deletingLastPathComponent) }
+                return
+            }
+            let items = listing.map { raw in
+                var item = raw
+                item.folder = self.browserFolder
+                if item.isDirectory { item.stats = self.folderStats[item.path] } else { item.entry = self.entryIndex[item.path] }
+                return item
+            }
+            if items != self.browserItems { self.browserItems = items }
+        }
+    }
+
+    nonisolated private static func list(_ url: URL) -> [ArchiveBrowserItem]? {
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isPackageKey, .fileSizeKey, .contentModificationDateKey, .localizedTypeDescriptionKey]
+        guard let contents = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: keys,
+                                                                          options: [.skipsHiddenFiles]) else { return nil }
+        return contents.compactMap { child in
+            guard let values = try? child.resourceValues(forKeys: Set(keys)) else { return nil }
+            let isDirectory = values.isDirectory == true && values.isPackage != true
+            return ArchiveBrowserItem(path: child.path, name: child.lastPathComponent, isDirectory: isDirectory,
+                                      size: values.fileSize.map(Int64.init), modified: values.contentModificationDate,
+                                      kind: values.localizedTypeDescription ?? (isDirectory ? "文件夹" : "文稿"), folder: "")
+        }
+    }
+
+    private func item(for entry: ArchiveFileEntry) -> ArchiveBrowserItem {
+        let url = URL(fileURLWithPath: entry.path)
+        let kind = (try? url.resourceValues(forKeys: [.localizedTypeDescriptionKey]).localizedTypeDescription)
+            ?? UTType(filenameExtension: url.pathExtension)?.localizedDescription ?? "文稿"
+        return ArchiveBrowserItem(path: entry.path, name: entry.name, isDirectory: false, size: entry.record?.size,
+                                  modified: entry.record?.modifiedAt, kind: kind, entry: entry, folder: entry.folder)
+    }
 
     /// The journal entry that moved the file, while it can still be undone.
     func undoableOperation(for entry: ArchiveFileEntry) -> ArchiveOperation? {

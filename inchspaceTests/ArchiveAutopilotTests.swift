@@ -267,7 +267,7 @@ final class ArchiveAutopilotTests: XCTestCase {
             keywordsSeen = request.file.keywords
             return ArchiveFileDecision(proposedName: request.file.source.lastPathComponent, folder: "music", belongsHere: false)
         })).run()
-        XCTAssertEqual(keywordsSeen, [], "No keywords could be read, yet the file was still offered to the model by name.")
+        XCTAssertEqual(keywordsSeen, ["aori", "song"], "A song is never read; its keywords come from the name alone.")
         XCTAssertEqual(summary.movedFiles, 1)
         XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("music/aori - song.mp3")))
     }
@@ -574,6 +574,47 @@ final class ArchiveAutopilotTests: XCTestCase {
         var nested = f.config
         nested.folders.append(ArchiveFolder(role: .library, url: f.workspace.appendingPathComponent("Inside")))
         XCTAssertThrowsError(try ArchiveFileSystem.validateConfiguration(nested, stateDirectory: f.state, requiresDirectoryAccess: false))
+    }
+
+    // MARK: Files sorted by type
+
+    func testSongsAndInstallersAreSortedByTypeWithoutTheModel() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        try FileManager.default.createDirectory(at: f.workspace.appendingPathComponent("Library/Music"), withIntermediateDirectories: true)
+        let kept = f.workspace.appendingPathComponent("Library/Music/kept.flac")
+        try Data("kept".utf8).write(to: kept)
+        _ = try f.file("loose song.mp3")
+        _ = try f.file("Setup 1.2.dmg")
+        _ = try f.file("notes.txt")
+        let service = try await f.service()
+        var asked: [String] = []
+        var autopilot = f.autopilot(service, planner: f.planner(review: { request in
+            asked.append(request.file.source.lastPathComponent)
+            return ArchiveFileDecision(proposedName: request.file.source.lastPathComponent, folder: request.folder)
+        }))
+        autopilot.sortsByType = true
+        let summary = try await autopilot.run()
+        XCTAssertEqual(asked, ["notes.txt"], "Only files the model can say something about are sent.")
+        XCTAssertTrue(ArchiveFileSystem.exists(kept), "A song already in a music folder stays.")
+        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("Library/Music/loose song.mp3")),
+                      "A loose song joins the existing music folder.")
+        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("安装包与镜像/Setup 1.2.dmg")))
+        XCTAssertEqual(summary.movedFiles, 2)
+        let records = await service.snapshot().files ?? [:]
+        XCTAssertEqual(records[kept.path]?.resolution, .organized)
+        XCTAssertEqual(records[f.workspace.appendingPathComponent("安装包与镜像/Setup 1.2.dmg").path]?.previousFolder, "")
+    }
+
+    func testFairOrderLetsEveryFolderTakeTurns() {
+        func evidence(_ path: String) -> ArchiveEvidence {
+            ArchiveEvidence(url: URL(fileURLWithPath: path), fingerprint: ArchiveFingerprint(device: 0, inode: 0, size: 0, modifiedSeconds: 0,
+                                                                                            modifiedNanoseconds: 0, sha256: ""),
+                            words: [], extractionNote: nil)
+        }
+        let files = ["/w/A/Music/1.mp3", "/w/A/Music/2.mp3", "/w/A/Music/3.mp3", "/w/Docs/a.pdf", "/w/Docs/b.pdf", "/w/x.txt"].map(evidence)
+        let order = ArchiveService.fairOrder(files, known: ["/w/Docs/a.pdf"]).map(\.url.path)
+        XCTAssertEqual(order, ["/w/A/Music/1.mp3", "/w/Docs/b.pdf", "/w/x.txt", "/w/A/Music/2.mp3", "/w/A/Music/3.mp3", "/w/Docs/a.pdf"])
     }
 
     private struct Fixture {

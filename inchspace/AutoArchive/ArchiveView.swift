@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Auto-archive as one full-width workbench: a header with every action, a status strip, the file list with
-/// what changed for each file, and a side column with the selected file's details and the batch history.
+/// Auto-archive as one full-width workbench: a header with every action, a status strip, a Finder-style browser
+/// of the folder with each file's status, and a side column with the selected file's details and the batch history.
 struct ArchiveView: View {
     @ObservedObject var model: ArchiveViewModel
     @ObservedObject var aiSettings: TerminalAISettings
@@ -130,7 +130,7 @@ private struct ArchiveWorkbenchView: View {
                         HStack(alignment: .top, spacing: 16) {
                             VStack(spacing: 16) {
                                 ArchiveStatusStrip(model: model)
-                                ArchiveFileListPanel(model: model)
+                                ArchiveBrowserPanel(model: model)
                             }
                             ArchiveSideColumn(model: model).frame(width: 330)
                         }
@@ -138,7 +138,7 @@ private struct ArchiveWorkbenchView: View {
                         ScrollView {
                             VStack(spacing: 16) {
                                 ArchiveStatusStrip(model: model)
-                                ArchiveFileListPanel(model: model).frame(minHeight: 420)
+                                ArchiveBrowserPanel(model: model).frame(minHeight: 420)
                                 ArchiveSideColumn(model: model).frame(minHeight: 360)
                             }
                         }
@@ -320,218 +320,6 @@ private struct CountBadge: View {
     }
 }
 
-// MARK: - File list
-
-private struct ArchiveFileListPanel: View {
-    @ObservedObject var model: ArchiveViewModel
-
-    var body: some View {
-        VStack(spacing: 0) {
-            toolbar
-            Divider()
-            columnHeader
-            Divider()
-            content
-            Divider()
-            footer
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .appSurface()
-    }
-
-    private var toolbar: some View {
-        HStack(spacing: 12) {
-            Text("文件处理").font(.headline)
-            Picker("筛选", selection: $model.filter) {
-                ForEach(ArchiveEntryFilter.allCases) { item in Text(item.title).tag(item) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(maxWidth: 360)
-            Spacer(minLength: 8)
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("搜索文件名、主题或摘要", text: $model.searchText).textFieldStyle(.plain)
-                if !model.searchText.isEmpty {
-                    Button { model.searchText = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-                        .buttonStyle(.plain).accessibilityLabel("清除搜索")
-                }
-            }
-            .padding(.horizontal, 10).frame(width: 220, height: 28)
-            .background(Color(nsColor: .textBackgroundColor).opacity(0.6), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(Color(nsColor: .separatorColor).opacity(0.5)))
-        }
-        .padding(.horizontal, 16).frame(height: 50)
-    }
-
-    private var columnHeader: some View {
-        HStack(spacing: 12) {
-            Color.clear.frame(width: 20)
-            Text("文件").frame(maxWidth: .infinity, alignment: .leading)
-            Text("变更").frame(maxWidth: .infinity, alignment: .leading)
-            Text("主题").frame(width: ArchiveColumns.topic, alignment: .leading)
-            Text("时间").frame(width: ArchiveColumns.time, alignment: .trailing)
-        }
-        .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-        .padding(.horizontal, 14).frame(height: 30)
-        .background(.ultraThinMaterial.opacity(0.5))
-    }
-
-    @ViewBuilder private var content: some View {
-        let rows = model.filteredEntries
-        if rows.isEmpty {
-            VStack(spacing: 10) {
-                Image(systemName: model.isRunning ? "doc.text.magnifyingglass" : "tray")
-                    .font(.system(size: 28)).foregroundStyle(.secondary)
-                Text(emptyText).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(24)
-        } else {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(rows) { entry in
-                            ArchiveFileRow(entry: entry, selected: model.selectedPath == entry.path) {
-                                model.selectedPath = model.selectedPath == entry.path ? nil : entry.path
-                            }
-                            .id(entry.path)
-                            Divider().padding(.leading, 46)
-                        }
-                    }
-                }
-                .onChange(of: model.selectedPath) { _, path in
-                    if let path { withAnimation { proxy.scrollTo(path, anchor: nil) } }
-                }
-            }
-        }
-    }
-
-    private var emptyText: String {
-        if model.isRunning { return "正在查找需要整理的文件…" }
-        if !model.searchText.isEmpty || model.filter != .all { return "没有符合条件的文件" }
-        return "开始整理后，这里会逐个列出每个文件的识别结果和改动"
-    }
-
-    private var footer: some View {
-        HStack {
-            Text("\(model.filteredEntries.count) 个文件").font(.caption).foregroundStyle(.secondary)
-            Spacer()
-            if !model.isRunning, model.entries.contains(where: \.isLive) {
-                Button("清除本次状态") { model.clearFileActivity() }.buttonStyle(.borderless).font(.caption)
-                    .help("只清除“本次”标记，处理记录仍然保留")
-            }
-        }
-        .padding(.horizontal, 16).frame(height: 32)
-        .background(.ultraThinMaterial.opacity(0.36))
-    }
-}
-
-private enum ArchiveColumns {
-    static let topic: CGFloat = 104
-    static let time: CGFloat = 84
-}
-
-private struct ArchiveFileRow: View {
-    let entry: ArchiveFileEntry
-    let selected: Bool
-    let select: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        let style = ArchiveFileStatusStyle(entry.status)
-        Button(action: select) {
-            HStack(alignment: .center, spacing: 12) {
-                Group {
-                    if entry.status == .processing { ProgressView().controlSize(.small) }
-                    else { Image(systemName: style.symbol).foregroundStyle(style.color) }
-                }
-                .frame(width: 20)
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(entry.name).font(.body.weight(.medium)).lineLimit(1).truncationMode(.middle)
-                        if entry.isLive {
-                            Text("本次").font(.caption2.weight(.semibold)).foregroundStyle(Color.accentColor)
-                                .padding(.horizontal, 5).padding(.vertical, 1)
-                                .background(Color.accentColor.opacity(0.12), in: Capsule())
-                        }
-                    }
-                    Text(entry.folder.isEmpty ? "工作区根目录" : entry.folder).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                ArchiveChangeText(entry: entry).frame(maxWidth: .infinity, alignment: .leading)
-                Group {
-                    if entry.topic.isEmpty { Text("—").foregroundStyle(.tertiary) }
-                    else {
-                        Text(entry.topic).font(.caption.weight(.medium)).lineLimit(1)
-                            .padding(.horizontal, 8).padding(.vertical, 3)
-                            .background(Color.accentColor.opacity(0.12), in: Capsule())
-                    }
-                }
-                .frame(width: ArchiveColumns.topic, alignment: .leading)
-                Text(entry.updatedAt.formatted(.relative(presentation: .named)))
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                    .frame(width: ArchiveColumns.time, alignment: .trailing)
-            }
-            .padding(.horizontal, 14).padding(.vertical, 9)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .background(selected ? Color.accentColor.opacity(0.12) : (hovering ? Color.primary.opacity(0.04) : Color.clear))
-        .onHover { hovering = $0 }
-        .help(entry.path)
-        .accessibilityElement(children: .combine)
-    }
-}
-
-/// The "变更" column: says in one line what happened to the file.
-private struct ArchiveChangeText: View {
-    let entry: ArchiveFileEntry
-
-    var body: some View {
-        switch entry.change {
-        case .renamed(let from, let to):
-            line(tag: "改名", color: .blue, from: from, to: to)
-        case .moved(let from, let to):
-            line(tag: "移动", color: .purple, from: folderName(from), to: folderName(to))
-        case .movedAndRenamed(let fromFolder, let toFolder, let fromName, let toName):
-            line(tag: "移动并改名", color: .purple, from: join(fromFolder, fromName), to: join(toFolder, toName))
-        case .none:
-            plain
-        }
-    }
-
-    @ViewBuilder private var plain: some View {
-        switch entry.status {
-        case .processing, .queued:
-            Text(entry.detail ?? "等待中").font(.callout).foregroundStyle(.secondary).lineLimit(2)
-        case .failed:
-            Text(entry.detail ?? "失败").font(.callout).foregroundStyle(.red).lineLimit(2)
-        case .skipped:
-            Text("未识别，留在原处").font(.callout).foregroundStyle(.orange).lineLimit(2)
-        case .unplaced:
-            Text("未归位：暂无合适的文件夹").font(.callout).foregroundStyle(.yellow).lineLimit(2)
-        case .completed:
-            Text("保持不变").font(.callout).foregroundStyle(.secondary)
-        }
-    }
-
-    private func line(tag: String, color: Color, from: String, to: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(tag).font(.caption.weight(.semibold)).foregroundStyle(color)
-                .padding(.horizontal, 6).padding(.vertical, 2)
-                .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
-            VStack(alignment: .leading, spacing: 1) {
-                Text(from).font(.callout).foregroundStyle(.secondary).strikethrough(color: .secondary.opacity(0.6)).lineLimit(1).truncationMode(.middle)
-                Text("→ " + to).font(.callout).lineLimit(1).truncationMode(.middle)
-            }
-        }
-    }
-
-    private func folderName(_ folder: String) -> String { folder.isEmpty ? "工作区根目录" : folder }
-    private func join(_ folder: String, _ name: String) -> String { folder.isEmpty ? name : folder + "/" + name }
-}
-
 private struct ArchiveFileStatusStyle {
     let title: String
     let symbol: String
@@ -579,10 +367,12 @@ private struct ArchiveDetailPanel: View {
             Divider()
             if let entry = model.selectedEntry {
                 ScrollView { details(entry).padding(16) }
+            } else if let item = model.selectedItem {
+                ScrollView { basics(item).padding(16) }
             } else {
                 VStack(spacing: 8) {
                     Image(systemName: "sidebar.right").font(.system(size: 24)).foregroundStyle(.secondary)
-                    Text("点击左侧的文件，查看它的基本信息、AI 摘要和这次的改动").font(.caption).foregroundStyle(.secondary)
+                    Text("点击左侧的文件或文件夹，查看它的基本信息、AI 摘要和这次的改动").font(.caption).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity).padding(20)
@@ -655,6 +445,40 @@ private struct ArchiveDetailPanel: View {
                         .disabled(model.isRunning)
                         .help("把这个文件放回原来的位置和名称")
                 }
+            }
+            .buttonStyle(.bordered).controlSize(.small)
+        }
+    }
+
+    /// A file autopilot has not looked at yet, or a folder: what is on disk and how its files stand.
+    @ViewBuilder private func basics(_ item: ArchiveBrowserItem) -> some View {
+        let status = ArchiveItemStatus(item)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                ArchiveItemIcon(item: item, size: 40)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.name).font(.body.weight(.semibold)).textSelection(.enabled)
+                    Text(item.folder.isEmpty ? "工作区根目录" : item.folder).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                    Text(status.title).font(.caption.weight(.medium)).foregroundStyle(status.color)
+                }
+            }
+            section("基本信息") {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
+                    infoRow("种类", item.kind)
+                    if !item.isDirectory, let size = item.size { infoRow("大小", ByteCountFormatter.string(fromByteCount: size, countStyle: .file)) }
+                    if let modified = item.modified { infoRow("修改时间", format(modified)) }
+                }
+            }
+            section("整理状态") {
+                Text(item.isDirectory ? (item.stats.map(\.summary).flatMap { $0.isEmpty ? nil : $0 } ?? "这个文件夹里还没有整理过的文件")
+                     : "还没有整理。下次运行时，歌曲、视频、安装包和大文件按类型归类，其他文件交给 AI 判断。")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: 8) {
+                if item.isDirectory {
+                    Button("打开文件夹", systemImage: "folder") { model.open(item) }
+                }
+                Button("在访达中显示", systemImage: "magnifyingglass") { model.reveal(item.url) }
             }
             .buttonStyle(.bordered).controlSize(.small)
         }

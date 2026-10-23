@@ -206,7 +206,10 @@ struct ArchiveAIClient {
         let session = URLSession(configuration: configurationForSession, delegate: ArchiveAINoRedirect(), delegateQueue: nil)
         defer { session.invalidateAndCancel() }
         let (bytes, response): (URLSession.AsyncBytes, URLResponse)
+        // Stopping the run cancels the request; URLSession reports that as `URLError.cancelled`, which must stop the
+        // run quietly instead of showing up as a failure named "cancelled".
         do { (bytes, response) = try await session.bytes(for: request) }
+        catch let error as URLError where error.code == .cancelled { throw CancellationError() }
         catch let error as URLError where error.code == .timedOut {
             throw ArchiveAIUnavailable("模型在 \(Int(tuning.idleTimeout)) 秒内没有响应。本机模型请确认服务已启动且模型已加载；提示词较长时首个字可能需要更久。")
         }
@@ -225,6 +228,8 @@ struct ArchiveAIClient {
                 if parser.content.count != previous { onProgress(parser.content.count) }
                 if parser.finished { break }
             }
+        } catch let error as URLError where error.code == .cancelled {
+            throw CancellationError()
         } catch let error as URLError where error.code == .timedOut {
             throw ArchiveAIUnavailable("模型输出中途停顿超过 \(Int(tuning.idleTimeout)) 秒，已放弃本轮。可减少待整理文件数量或换用更快的模型。")
         }

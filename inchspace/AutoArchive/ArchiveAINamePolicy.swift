@@ -2,16 +2,10 @@ import Foundation
 
 /// Model-generated names are suggestions, never paths or instructions.
 nonisolated enum ArchiveAINamePolicy {
+    /// Number-bearing identifiers of the original name (dates, invoice IDs, versions) that a rename must keep.
+    /// Noise that only looks like one (`(1)`, `copy 2`) is not among them, and dates are in `YYYY-MM-DD` form.
     static func identifiers(in name: String) -> [String] {
-        let stem = (name as NSString).deletingPathExtension
-        // Preserve original number-bearing identifiers as complete tokens (dates, invoice IDs, versions).
-        let regex = try? NSRegularExpression(pattern: "[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*")
-        let ranges = regex?.matches(in: stem, range: NSRange(stem.startIndex..., in: stem)) ?? []
-        return ranges.compactMap { match in
-            guard let range = Range(match.range, in: stem) else { return nil }
-            let token = String(stem[range])
-            return token.contains(where: { $0.isNumber }) ? token : nil
-        }
+        ArchiveNameNormalizer.identifiers(in: (name as NSString).deletingPathExtension)
     }
 
     static func validate(_ proposedName: String?, original: URL) throws -> String {
@@ -27,10 +21,7 @@ nonisolated enum ArchiveAINamePolicy {
             throw ArchiveError("AI 改名必须保留原扩展名（包括大小写），不能改变文件格式。")
         }
         let stem = (name as NSString).deletingPathExtension
-        let retained = identifiers(in: original.lastPathComponent).allSatisfy { identifier in
-            let pattern = "(?<![A-Za-z0-9])" + NSRegularExpression.escapedPattern(for: identifier) + "(?![A-Za-z0-9])"
-            return stem.range(of: pattern, options: .regularExpression) != nil
-        }
+        let retained = identifiers(in: original.lastPathComponent).allSatisfy { ArchiveNameNormalizer.contains($0, in: stem) }
         guard retained else {
             throw ArchiveError("AI 改名丢失了原有日期、编号或版本，请重新规划。")
         }

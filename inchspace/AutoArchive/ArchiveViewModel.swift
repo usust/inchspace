@@ -616,7 +616,9 @@ final class ArchiveViewModel: ObservableObject {
         switch progress.phase {
         case .scanning: progress.round == 0 ? "正在查看文件…" : "正在重新扫描文件夹…"
         case .waitingForStableFiles: "等待 \(progress.remainingFiles) 个新文件写入完成…"
-        case .consolidating: "正在合并含义相同的文件夹…"
+        case .auditing: "正在按目录规范审计文件夹…"
+        case .restructuring: "正在规范文件夹结构…"
+        case .checking: "正在做一致性自检…"
         case .reviewing: progress.batchFiles > 1 ? "正在识别 \(progress.batchFiles) 个文件…" : "正在查看「\(progress.directory)」…"
         case .grouping: "正在为「\(progress.directory)」中的 \(progress.batchFiles) 个文件归类…"
         case .nesting: "正在梳理「\(progress.directory)」的文件夹层级…"
@@ -630,7 +632,7 @@ final class ArchiveViewModel: ObservableObject {
         var parts: [String] = []
         if progress.round > 0 { parts.append("第 \(progress.round) 轮") }
         if progress.totalFiles > 0 { parts.append("已处理 \(progress.processedFiles)/\(progress.totalFiles) 个文件") }
-        if [.consolidating, .reviewing, .grouping, .nesting].contains(progress.phase) {
+        if [.auditing, .reviewing, .grouping, .nesting].contains(progress.phase) {
             parts.append(progress.receivedCharacters > 0 ? "模型已回复 \(progress.receivedCharacters) 字" : "等待模型回复")
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
@@ -737,6 +739,36 @@ final class ArchiveViewModel: ObservableObject {
     }
 
     func dismissFailure() { if case .failed = activity { activity = .idle } }
+
+    // MARK: Convention
+
+    /// The preference as the user wrote it, or the default text when there is none.
+    var preference: String { state.preference ?? ArchiveConvention.defaultPreference }
+    var convention: ArchiveConvention { state.convention }
+
+    /// A line for the status strip when the structure is not fully in order: the audit could not ask the model, or
+    /// the consistency check left items open. Nil when everything follows the convention.
+    var conventionNotice: String? {
+        if let audit = state.audit, audit.status == .failed {
+            return "结构审计未完成：\(audit.message ?? "模型没有回应")。下次整理会重试。"
+        }
+        if let report = state.consistency, !report.isClean {
+            let retry = (state.audit?.attempts ?? 0) < ArchiveAuditState.maxAttempts ? "下次整理优先处理" : "多次整理仍未解决，请手动检查"
+            return "一致性自检：\(report.summary)。\(retry)。"
+        }
+        return nil
+    }
+
+    /// Saves a new preference; the next run audits the whole structure under the changed convention.
+    func setPreference(_ text: String) async {
+        guard let service else { return }
+        do {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            try await service.setPreference(trimmed == ArchiveConvention.defaultPreference ? nil : trimmed)
+            state = await service.snapshot()
+            organize()
+        } catch { activity = .failed(error.localizedDescription) }
+    }
 
     func openModelSettings() {
         NotificationCenter.default.post(name: .inchspaceOpenSettings, object: nil, userInfo: ["tab": SettingsTab.ai.rawValue])

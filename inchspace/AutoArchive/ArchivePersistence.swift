@@ -30,7 +30,8 @@ nonisolated final class ArchivePersistence: @unchecked Sendable {
         static let plans = "plans"
         static let settled = "settled"
         static let files = "files"
-        static let all = [rules, suggestions, operations, observations, cache, plans, settled, files]
+        static let folders = "folders"
+        static let all = [rules, suggestions, operations, observations, cache, plans, settled, files, folders]
     }
 
     private enum Meta {
@@ -40,7 +41,10 @@ nonisolated final class ArchivePersistence: @unchecked Sendable {
         static let aiPresent = "ai.present"
         static let settledPresent = "settled.present"
         static let filesPresent = "files.present"
-        static let consolidatedStructure = "consolidated.structure"
+        static let foldersPresent = "folders.present"
+        static let audit = "audit"
+        static let consistency = "consistency"
+        static let preference = "preference"
     }
 
     static let databaseName = "archive.sqlite"
@@ -99,7 +103,9 @@ nonisolated final class ArchivePersistence: @unchecked Sendable {
             if let data = meta[Meta.configuration] { state.configuration = try decoder.decode(ArchiveConfiguration.self, from: data) }
             if let data = meta[Meta.version] { state.version = try decoder.decode(Int.self, from: data) }
             if let data = meta[Meta.report] { state.report = try decoder.decode(ArchiveLearningReport.self, from: data) }
-            if let data = meta[Meta.consolidatedStructure] { state.consolidatedStructure = try decoder.decode(String.self, from: data) }
+            if let data = meta[Meta.audit] { state.audit = try decoder.decode(ArchiveAuditState.self, from: data) }
+            if let data = meta[Meta.consistency] { state.consistency = try decoder.decode(ArchiveConsistencyReport.self, from: data) }
+            if let data = meta[Meta.preference] { state.preference = try decoder.decode(String.self, from: data) }
             state.rules = try ordered(Collection.rules).map { try decoder.decode(ArchiveRule.self, from: $0) }
             state.suggestions = try ordered(Collection.suggestions).map { try decoder.decode(ArchiveSuggestion.self, from: $0) }
             state.operations = try ordered(Collection.operations).map { try decoder.decode(ArchiveOperation.self, from: $0) }
@@ -113,6 +119,9 @@ nonisolated final class ArchivePersistence: @unchecked Sendable {
             }
             if meta[Meta.filesPresent] != nil {
                 state.files = try (rows[Collection.files] ?? [:]).mapValues { try decoder.decode(ArchiveFileRecord.self, from: $0.data) }
+            }
+            if meta[Meta.foldersPresent] != nil {
+                state.folders = try (rows[Collection.folders] ?? [:]).mapValues { try decoder.decode(ArchiveFolderRecord.self, from: $0.data) }
             }
         } catch {
             throw ArchiveError("归档记录无法解析，请检查 \(directory.appendingPathComponent(Self.databaseName).path)。原文件已保留。")
@@ -128,10 +137,13 @@ nonisolated final class ArchivePersistence: @unchecked Sendable {
             Meta.version: try encoder.encode(state.version),
         ]
         if let report = state.report { nextMeta[Meta.report] = try encoder.encode(report) }
-        if let structure = state.consolidatedStructure { nextMeta[Meta.consolidatedStructure] = try encoder.encode(structure) }
+        if let audit = state.audit { nextMeta[Meta.audit] = try encoder.encode(audit) }
+        if let consistency = state.consistency { nextMeta[Meta.consistency] = try encoder.encode(consistency) }
+        if let preference = state.preference { nextMeta[Meta.preference] = try encoder.encode(preference) }
         if state.ai != nil { nextMeta[Meta.aiPresent] = Data([1]) }
         if state.settled != nil { nextMeta[Meta.settledPresent] = Data([1]) }
         if state.files != nil { nextMeta[Meta.filesPresent] = Data([1]) }
+        if state.folders != nil { nextMeta[Meta.foldersPresent] = Data([1]) }
 
         var nextRows: [String: [String: Row]] = [:]
         let previous = lastState
@@ -147,6 +159,7 @@ nonisolated final class ArchivePersistence: @unchecked Sendable {
         nextRows[Collection.cache] = try keyed(state.cache, previous: previous?.cache, collection: Collection.cache, encoder: encoder)
         nextRows[Collection.settled] = try keyed(state.settled ?? [:], previous: previous?.settled, collection: Collection.settled, encoder: encoder)
         nextRows[Collection.files] = try keyed(state.files ?? [:], previous: previous?.files, collection: Collection.files, encoder: encoder)
+        nextRows[Collection.folders] = try keyed(state.folders ?? [:], previous: previous?.folders, collection: Collection.folders, encoder: encoder)
 
         try transaction {
             for (key, data) in nextMeta where meta[key] != data { try upsertMeta(key, data) }

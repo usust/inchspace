@@ -119,6 +119,7 @@ private struct ArchiveOnboardingView: View {
 private struct ArchiveWorkbenchView: View {
     @ObservedObject var model: ArchiveViewModel
     @State private var confirmsReorganize = false
+    @State private var editsConvention = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -149,6 +150,7 @@ private struct ArchiveWorkbenchView: View {
                 .padding(.top, 8)
             }
         }
+        .sheet(isPresented: $editsConvention) { ArchiveConventionSheet(model: model) }
         .confirmationDialog("重新整理全部文件？", isPresented: $confirmsReorganize, titleVisibility: .visible) {
             Button("重新整理全部") { Task { await model.reorganizeEverything() } }
             Button("取消", role: .cancel) {}
@@ -200,6 +202,9 @@ private struct ArchiveWorkbenchView: View {
                     Button("在访达中显示", systemImage: "folder") { model.reveal(folder.url) }
                         .help("在访达中打开这个文件夹")
                 }
+                Button("整理规范", systemImage: "list.bullet.rectangle") { editsConvention = true }
+                    .disabled(model.isRunning)
+                    .help("查看目录与命名规范，用一句话调整偏好")
                 Button("重新整理全部", systemImage: "arrow.counterclockwise") { confirmsReorganize = true }
                     .disabled(model.isRunning)
                     .help("清空处理记录，重新识别每个文件")
@@ -231,6 +236,9 @@ private struct ArchiveStatusStrip: View {
                 Text(title).font(.title3.weight(.semibold)).lineLimit(2)
                     .contentTransition(.numericText())
                 Text(subtitle).font(.callout).foregroundStyle(.secondary).lineLimit(2)
+                if case .idle = model.activity, model.isModelConfigured, let notice = model.conventionNotice {
+                    Label(notice, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange).lineLimit(2)
+                }
                 if case .working = model.activity {
                     ArchiveRunProgressBar(progress: model.progress, detail: model.progressDetail, startedAt: model.runStartedAt)
                 }
@@ -370,12 +378,7 @@ private struct ArchiveDetailPanel: View {
             } else if let item = model.selectedItem {
                 ScrollView { basics(item).padding(16) }
             } else {
-                VStack(spacing: 8) {
-                    Image(systemName: "sidebar.right").font(.system(size: 24)).foregroundStyle(.secondary)
-                    Text("点击左侧的文件或文件夹，查看它的基本信息、AI 摘要和这次的改动").font(.caption).foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity).padding(20)
+                ScrollView { ArchiveConsistencyView(model: model).padding(16) }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -471,7 +474,7 @@ private struct ArchiveDetailPanel: View {
             }
             section("整理状态") {
                 Text(item.isDirectory ? (item.stats.map(\.summary).flatMap { $0.isEmpty ? nil : $0 } ?? "这个文件夹里还没有整理过的文件")
-                     : "还没有整理。下次运行时，歌曲、视频、安装包和大文件按类型归类，其他文件交给 AI 判断。")
+                     : "还没有整理。下次运行时，歌曲、视频、安装包和大文件按类型放进各自类别的唯一文件夹，其他文件交给 AI 判断。")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 8) {
@@ -581,6 +584,89 @@ private struct ArchiveHistoryPanel: View {
         if folders > 0 { parts.append("调整 \(folders) 个文件夹") }
         if created > 0 { parts.append("新建 \(created) 个文件夹") }
         return parts.isEmpty ? "没有可撤销的更改" : parts.joined(separator: "，")
+    }
+}
+
+// MARK: - Convention
+
+/// Shown in the details column while nothing is selected: the convention in effect and what the last consistency
+/// check found.
+private struct ArchiveConsistencyView: View {
+    @ObservedObject var model: ArchiveViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("点击左侧的文件或文件夹，查看它的基本信息、AI 摘要和这次的改动").font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("整理规范").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Text(model.convention.summary).font(.callout).fixedSize(horizontal: false, vertical: true)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("一致性自检").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                if let report = model.state.consistency {
+                    Label(report.summary, systemImage: report.isClean ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                        .font(.callout).foregroundStyle(report.isClean ? .green : .orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                    ForEach(report.issues.prefix(8)) { issue in
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(issue.path).font(.caption.weight(.medium)).textSelection(.enabled)
+                            Text(issue.detail).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    if report.issues.count + report.omittedFileIssues > 8 {
+                        Text("还有 \(report.issues.count + report.omittedFileIssues - 8) 项").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text("检查于 " + report.checkedAt.formatted(.relative(presentation: .named))).font(.caption2).foregroundStyle(.tertiary)
+                } else {
+                    Text("整理完成后会自动检查目录与命名是否符合规范").font(.callout).foregroundStyle(.secondary)
+                }
+            }
+            if let audit = model.state.audit, audit.status == .failed {
+                Label("结构审计未完成：\(audit.message ?? "模型没有回应")", systemImage: "exclamationmark.octagon")
+                    .font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The user's preference in plain words, read as overrides of the convention. Only what the convention offers is
+/// taken from it; the parsed result is shown before saving.
+private struct ArchiveConventionSheet: View {
+    @ObservedObject var model: ArchiveViewModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("整理规范").font(.title3.weight(.semibold))
+            Text("所有整理步骤都遵循同一套目录与命名规范。可以用一句话调整：类别名用中文或英文、文件名中的词用 - 还是空格连接、按类别还是按项目整理、混合文件夹的阈值，或某个类别的名称（如“图片叫相册”）。")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            TextEditor(text: $draft)
+                .font(.body)
+                .frame(minHeight: 90)
+                .padding(6)
+                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(.separator))
+            VStack(alignment: .leading, spacing: 4) {
+                Text("将采用").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Text(ArchiveConvention.parse(preference: draft).summary).font(.callout)
+            }
+            HStack {
+                Button("恢复默认") { draft = ArchiveConvention.defaultPreference }
+                Spacer()
+                Button("取消", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("保存并重新审计") {
+                    Task { await model.setPreference(draft) }
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 480)
+        .onAppear { draft = model.preference }
     }
 }
 

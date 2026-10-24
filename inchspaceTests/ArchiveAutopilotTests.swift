@@ -112,20 +112,22 @@ final class ArchiveAutopilotTests: XCTestCase {
         XCTAssertNil(records[source.path])
     }
 
-    func testUnsafeNamesAreKeptAsTheyAre() async throws {
+    func testUnsafeNamesAreCorrectedToTheConvention() async throws {
         let f = try Fixture()
         defer { f.remove() }
         let source = try f.file("report-2026-10-19.txt")
         let service = try await f.service()
         let autopilot = f.autopilot(service, planner: f.planner(review: { request in
-            // Drops the date and changes the extension: both must be refused.
+            // Drops the date and changes the extension: the extension is restored and the date put back in its field.
             ArchiveFileDecision(proposedName: "季度报告.md", folder: request.folder)
         }))
         let summary = try await autopilot.run()
-        XCTAssertEqual(summary.renamedFiles, 0)
-        XCTAssertTrue(ArchiveFileSystem.exists(source))
-        let record = await service.snapshot().files?[source.path]
-        XCTAssertEqual(record?.renamed, false)
+        XCTAssertEqual(summary.renamedFiles, 1)
+        XCTAssertFalse(ArchiveFileSystem.exists(source))
+        let renamed = f.workspace.appendingPathComponent("季度报告_2026-10-19.txt")
+        XCTAssertTrue(ArchiveFileSystem.exists(renamed))
+        let wasRenamed = await service.snapshot().files?[renamed.path]?.renamed
+        XCTAssertEqual(wasRenamed, true)
     }
 
     func testRenameNeverOverwritesAnExistingName() async throws {
@@ -139,9 +141,11 @@ final class ArchiveAutopilotTests: XCTestCase {
             return ArchiveFileDecision(proposedName: original == "scan.txt" ? "invoice.txt" : original, folder: request.folder)
         }))
         let summary = try await autopilot.run()
-        XCTAssertEqual(summary.renamedFiles, 0)
+        XCTAssertEqual(summary.renamedFiles, 1)
         XCTAssertEqual(try String(contentsOf: taken, encoding: .utf8), "invoice accounting payable Invoice.txt")
-        XCTAssertTrue(ArchiveFileSystem.exists(source))
+        XCTAssertFalse(ArchiveFileSystem.exists(source))
+        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("invoice_2.txt")),
+                      "A taken name gets the template's number field, never `(2)`.")
     }
 
     func testLooseFileWithoutAnswerIsCollectedInUnsortedFolder() async throws {
@@ -171,8 +175,8 @@ final class ArchiveAutopilotTests: XCTestCase {
     func testUnknownFileInASubfolderStaysWhereTheUserPutIt() async throws {
         let f = try Fixture()
         defer { f.remove() }
-        try FileManager.default.createDirectory(at: f.workspace.appendingPathComponent("Keys"), withIntermediateDirectories: true)
-        let source = f.workspace.appendingPathComponent("Keys/main.kdbx")
+        try FileManager.default.createDirectory(at: f.workspace.appendingPathComponent("Vault"), withIntermediateDirectories: true)
+        let source = f.workspace.appendingPathComponent("Vault/main.kdbx")
         try Data("db".utf8).write(to: source)
         let service = try await f.service()
         let summary = try await f.autopilot(service, planner: f.planner(review: { request in
@@ -188,8 +192,8 @@ final class ArchiveAutopilotTests: XCTestCase {
     func testUnknownLooseFileJoinsClearlySimilarFilesAnywhereInTheTree() async throws {
         let f = try Fixture()
         defer { f.remove() }
-        try FileManager.default.createDirectory(at: f.workspace.appendingPathComponent("Personal/Certificates"), withIntermediateDirectories: true)
-        try Data("pdf".utf8).write(to: f.workspace.appendingPathComponent("Personal/Certificates/aws-solutions-architect.pdf"))
+        try FileManager.default.createDirectory(at: f.workspace.appendingPathComponent("Personal/Cloud Training"), withIntermediateDirectories: true)
+        try Data("pdf".utf8).write(to: f.workspace.appendingPathComponent("Personal/Cloud Training/aws-solutions-architect.pdf"))
         _ = try f.file("aws solutions architect scan.jpg")
         let service = try await f.service()
         var offered: [String] = []
@@ -197,9 +201,10 @@ final class ArchiveAutopilotTests: XCTestCase {
             offered = request.candidates.map(\.folder.path)
             return ArchiveFileDecision(proposedName: request.file.source.lastPathComponent, folder: "", known: false)
         })).run()
-        XCTAssertEqual(offered.first, "Personal/Certificates", "The deep folder holding similar files is the first candidate.")
+        XCTAssertEqual(offered.first, "Personal/Cloud Training", "The deep folder holding similar files is the first candidate.")
         XCTAssertEqual(summary.movedFiles, 1)
-        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("Personal/Certificates/aws solutions architect scan.jpg")))
+        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("Personal/Cloud Training/aws-solutions-architect-scan.jpg")),
+                      "Moved under a name that follows the folder's pattern.")
     }
 
     func testModelThatAnswersNothingStopsTheRunWithoutMovingFiles() async throws {
@@ -325,18 +330,19 @@ final class ArchiveAutopilotTests: XCTestCase {
         })).run()
         XCTAssertEqual(keywordsSeen, ["aori", "song"], "A song is never read; its keywords come from the name alone.")
         XCTAssertEqual(summary.movedFiles, 1)
-        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("music/aori - song.mp3")))
+        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("音乐/aori - song.mp3")),
+                      "`music` became the canonical `音乐` first; the model's synonym still finds it.")
     }
 
     func testMisfiledFileLeavesItsFolder() async throws {
         let f = try Fixture()
         defer { f.remove() }
-        for name in ["Music", "Finance"] {
+        for name in ["Band", "Finance"] {
             try FileManager.default.createDirectory(at: f.workspace.appendingPathComponent(name), withIntermediateDirectories: true)
         }
-        try Data("song".utf8).write(to: f.workspace.appendingPathComponent("Music/song.mp3"))
-        try Data("invoice".utf8).write(to: f.workspace.appendingPathComponent("Music/invoice.pdf"))
-        try Data("report".utf8).write(to: f.workspace.appendingPathComponent("Music/report.pdf"))
+        try Data("song".utf8).write(to: f.workspace.appendingPathComponent("Band/song.mp3"))
+        try Data("invoice".utf8).write(to: f.workspace.appendingPathComponent("Band/invoice.pdf"))
+        try Data("report".utf8).write(to: f.workspace.appendingPathComponent("Band/report.pdf"))
         _ = try f.file("notes.pdf")
         let service = try await f.service()
         var siblingsSeen: [String] = []
@@ -358,10 +364,10 @@ final class ArchiveAutopilotTests: XCTestCase {
         _ = try await autopilot.run()
         XCTAssertEqual(siblingsSeen.sorted(), ["report.pdf", "song.mp3"])
         XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("Finance/invoice.pdf")), "Moved to the folder that fits.")
-        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("Docs/report.pdf")),
-                      "Without a fitting folder it is grouped with the loose files instead of staying with unrelated ones.")
-        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("Docs/notes.pdf")))
-        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("Music/song.mp3")))
+        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("文档/report.pdf")),
+                      "Without a fitting folder it is grouped with the loose files; `Docs` is the dictionary's `文档`.")
+        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("文档/notes.pdf")))
+        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("Band/song.mp3")))
     }
 
     // MARK: Step 0 – equivalent folders
@@ -378,12 +384,14 @@ final class ArchiveAutopilotTests: XCTestCase {
         try FileManager.default.createDirectory(at: f.workspace.appendingPathComponent("Downloads/music/live"), withIntermediateDirectories: true)
         try Data("c".utf8).write(to: f.workspace.appendingPathComponent("Downloads/music/live/c.mp3"))
         let service = try await f.service()
-        let summary = try await f.autopilot(service, planner: f.planner(consolidate: { request in
+        let summary = try await f.autopilot(service, planner: f.planner(audit: { request in
             XCTAssertEqual(request.folders.map(\.path).sorted(), ["Downloads", "Downloads/music", "Downloads/music/live", "音乐"])
-            return ArchiveConsolidationResponse(merges: [.init(keep: "音乐", merge: ["Downloads/music"], reason: "同为音乐")])
+            XCTAssertEqual(request.folders.first { $0.path == "Downloads/music" }?.guess, "音乐", "The dictionary's reading is sent along.")
+            return ArchiveAuditResponse(folders: [])
         })).run()
         XCTAssertEqual(try String(contentsOf: f.workspace.appendingPathComponent("音乐/a.mp3"), encoding: .utf8), "kept")
-        XCTAssertEqual(try String(contentsOf: f.workspace.appendingPathComponent("音乐/a (2).mp3"), encoding: .utf8), "other")
+        XCTAssertEqual(try String(contentsOf: f.workspace.appendingPathComponent("音乐/a_2.mp3"), encoding: .utf8), "other",
+                       "A clash is told apart by the number field, not `a (2).mp3`.")
         XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("音乐/b.mp3")))
         XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("音乐/live/c.mp3")))
         XCTAssertFalse(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("Downloads/music")), "The emptied folder is removed.")
@@ -402,7 +410,7 @@ final class ArchiveAutopilotTests: XCTestCase {
         XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("Downloads/music/live/c.mp3")))
     }
 
-    func testMergeRequestsIntoOwnSubfolderAreRefused() async throws {
+    func testNestedSameCategoryFolderIsFlattenedIntoTheCanonicalPath() async throws {
         let f = try Fixture()
         defer { f.remove() }
         for name in ["Music", "Music/Songs"] {
@@ -410,11 +418,12 @@ final class ArchiveAutopilotTests: XCTestCase {
         }
         try Data("x".utf8).write(to: f.workspace.appendingPathComponent("Music/Songs/x.mp3"))
         let service = try await f.service()
-        let summary = try await f.autopilot(service, planner: f.planner(consolidate: { _ in
-            ArchiveConsolidationResponse(merges: [.init(keep: "Music/Songs", merge: ["Music"], reason: nil)])
-        })).run()
-        XCTAssertEqual(summary.movedDirectories, 0)
-        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("Music/Songs/x.mp3")))
+        _ = try await f.autopilot(service, planner: f.planner()).run()
+        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("音乐/x.mp3")))
+        XCTAssertFalse(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("Music")))
+        XCTAssertFalse(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("音乐/Songs")))
+        let isClean = await service.snapshot().consistency?.isClean
+        XCTAssertEqual(isClean, true)
     }
 
     func testGroupingReusesExistingFolderRegardlessOfCase() async throws {
@@ -470,7 +479,7 @@ final class ArchiveAutopilotTests: XCTestCase {
                 return ArchiveGroupingResponse(summary: nil, groups: [
                     .init(folder: "Invoices", fileIDs: Array(ids[0..<2]), reason: nil),
                     .init(folder: "Receipts", fileIDs: Array(ids[2..<4]), reason: nil),
-                    .init(folder: "Photos", fileIDs: Array(ids[4..<6]), reason: nil),
+                    .init(folder: "Letters", fileIDs: Array(ids[4..<6]), reason: nil),
                 ])
             },
             nest: { request in
@@ -484,7 +493,7 @@ final class ArchiveAutopilotTests: XCTestCase {
         XCTAssertEqual(summary.movedDirectories, 2)
         XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("Finance/Invoices/a.txt")))
         XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("Finance/Receipts/c.txt")))
-        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("Photos/e.txt")))
+        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("Letters/e.txt")))
         let records = await service.snapshot().files ?? [:]
         XCTAssertNotNil(records[f.workspace.appendingPathComponent("Finance/Invoices/a.txt").path], "Records move with their folder.")
         XCTAssertGreaterThanOrEqual(nestCalls, 1)
@@ -504,7 +513,7 @@ final class ArchiveAutopilotTests: XCTestCase {
     func testFolderLevelThatWrapsEverythingIsRefused() async throws {
         let f = try Fixture()
         defer { f.remove() }
-        for name in ["Invoices", "Receipts", "Photos"] {
+        for name in ["Invoices", "Receipts", "Taxes"] {
             try FileManager.default.createDirectory(at: f.workspace.appendingPathComponent(name), withIntermediateDirectories: true)
         }
         for name in ["a.txt", "b.txt"] { _ = try f.file(name) }
@@ -530,7 +539,7 @@ final class ArchiveAutopilotTests: XCTestCase {
         let service = try await f.service()
         var batches: [[String]] = []
         var autopilot = ArchiveAutopilot(service: service, planner: ArchiveStagePlanner(
-            consolidate: { _ in ArchiveConsolidationResponse(merges: []) },
+            audit: { _ in ArchiveAuditResponse(folders: []) },
             review: { batch in
                 batches.append(batch.files.map { $0.file.source.lastPathComponent })
                 XCTAssertEqual(batch.folders, ["Taxes"])
@@ -566,7 +575,7 @@ final class ArchiveAutopilotTests: XCTestCase {
         let service = try await f.service()
         var asked: [[String]] = []
         var autopilot = f.autopilot(service, planner: ArchiveStagePlanner(
-            consolidate: { _ in ArchiveConsolidationResponse(merges: []) },
+            audit: { _ in ArchiveAuditResponse(folders: []) },
             review: { batch in
                 let names = batch.files.map { $0.file.source.lastPathComponent }
                 asked.append(names)
@@ -593,7 +602,7 @@ final class ArchiveAutopilotTests: XCTestCase {
         XCTAssertEqual(record?.resolution, .unplaced)
     }
 
-    func testTakenDestinationNamesLeaveTheFileInPlace() async throws {
+    func testTakenDestinationNameGetsANumberField() async throws {
         let f = try Fixture()
         defer { f.remove() }
         try FileManager.default.createDirectory(at: f.workspace.appendingPathComponent("图片"), withIntermediateDirectories: true)
@@ -603,8 +612,9 @@ final class ArchiveAutopilotTests: XCTestCase {
         let summary = try await f.autopilot(service, planner: f.planner(review: { request in
             ArchiveFileDecision(proposedName: request.file.source.lastPathComponent, folder: "图片", belongsHere: false)
         })).run()
-        XCTAssertEqual(summary.movedFiles, 0)
-        XCTAssertTrue(ArchiveFileSystem.exists(clash))
+        XCTAssertEqual(summary.movedFiles, 1)
+        XCTAssertFalse(ArchiveFileSystem.exists(clash))
+        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("图片/a_2.jpg")))
         XCTAssertEqual(try String(contentsOf: f.workspace.appendingPathComponent("图片/a.jpg"), encoding: .utf8), "old")
     }
 
@@ -653,14 +663,17 @@ final class ArchiveAutopilotTests: XCTestCase {
         autopilot.sortsByType = true
         let summary = try await autopilot.run()
         XCTAssertEqual(asked, ["notes.txt"], "Only files the model can say something about are sent.")
-        XCTAssertTrue(ArchiveFileSystem.exists(kept), "A song already in a music folder stays.")
-        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("Library/Music/loose song.mp3")),
-                      "A loose song joins the existing music folder.")
-        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("安装包与镜像/Setup 1.2.dmg")))
+        let home = f.workspace.appendingPathComponent("音乐/kept.flac")
+        XCTAssertFalse(ArchiveFileSystem.exists(kept))
+        XCTAssertTrue(ArchiveFileSystem.exists(home), "`Library/Music` was moved to the canonical `音乐` before files were placed.")
+        XCTAssertTrue(ArchiveFileSystem.exists(f.workspace.appendingPathComponent("音乐/loose song.mp3")),
+                      "A loose song joins the one music folder.")
+        let installer = f.workspace.appendingPathComponent("安装包与镜像/Setup_1.2.dmg")
+        XCTAssertTrue(ArchiveFileSystem.exists(installer), "Moved and named to the template, version kept.")
         XCTAssertEqual(summary.movedFiles, 2)
         let records = await service.snapshot().files ?? [:]
-        XCTAssertEqual(records[kept.path]?.resolution, .organized)
-        XCTAssertEqual(records[f.workspace.appendingPathComponent("安装包与镜像/Setup 1.2.dmg").path]?.previousFolder, "")
+        XCTAssertEqual(records[home.path]?.resolution, .organized)
+        XCTAssertEqual(records[installer.path]?.previousFolder, "")
     }
 
     func testFairOrderLetsEveryFolderTakeTurns() {
@@ -710,7 +723,7 @@ final class ArchiveAutopilotTests: XCTestCase {
         }
 
         /// Keeps every file where it is, groups nothing and adds no levels unless a step is given.
-        func planner(consolidate: (@MainActor (ArchiveConsolidationRequest) async throws -> ArchiveConsolidationResponse)? = nil,
+        func planner(audit: (@MainActor (ArchiveAuditRequest) async throws -> ArchiveAuditResponse)? = nil,
                      review: (@MainActor (ArchiveFileReview) async throws -> ArchiveFileDecision)? = nil,
                      group: (@MainActor (ArchiveGroupingRequest) async throws -> ArchiveGroupingResponse)? = nil,
                      nest: (@MainActor (ArchiveNestingRequest) async throws -> ArchiveNestingResponse)? = nil) -> ArchiveStagePlanner {
@@ -718,7 +731,7 @@ final class ArchiveAutopilotTests: XCTestCase {
                 ArchiveFileDecision(proposedName: request.file.source.lastPathComponent, folder: request.folder)
             }
             return ArchiveStagePlanner(
-                consolidate: consolidate ?? { _ in ArchiveConsolidationResponse(merges: []) },
+                audit: audit ?? { _ in ArchiveAuditResponse(folders: []) },
                 review: { batch in
                     var decisions: [String: ArchiveFileDecision] = [:]
                     for request in batch.files { decisions[request.file.id] = try await perFile(request) }

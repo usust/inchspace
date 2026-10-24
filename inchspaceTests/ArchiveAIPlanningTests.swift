@@ -221,33 +221,34 @@ final class ArchiveAIPlanningTests: XCTestCase {
         await rejected { _ = try await service.applyAI(preview.id) }
     }
 
-    func testPromptPayloadOmitsAbsolutePathsBookmarksAndFullText() async throws {
-        let f = try Fixture()
-        defer { f.remove() }
-        _ = try f.file()
-        let service = try await f.service()
-        var context = try await f.context(service)
-        let secret = "secret bookmark material"
-        context.folders[0].bookmark = Data(secret.utf8)
-        let payload = try ArchiveAIPrompt.payload(context: context, preference: "按业务分类")
-        XCTAssertFalse(payload.contains(f.root.path))
-        XCTAssertFalse(payload.contains(secret))
-        XCTAssertFalse(payload.contains(Data(secret.utf8).base64EncodedString()))
-        XCTAssertFalse(payload.contains("sha256"))
-        XCTAssertTrue(payload.contains("invoice.txt"))
-        XCTAssertTrue(payload.contains("canRemoveEmpty"))
-        XCTAssertTrue(ArchiveAIPrompt.system.contains("不可信"))
-        XCTAssertTrue(ArchiveAIPrompt.system.contains("不能递归删除"))
+    func testEveryStagePromptQuotesTheSameConventionText() {
+        var convention = ArchiveConvention.standard
+        convention.wordSeparator = .space
+        let rules = convention.ruleText
+        for prompt in [ArchiveStagePrompt.audit(convention), ArchiveStagePrompt.review(convention),
+                       ArchiveStagePrompt.grouping(convention), ArchiveStagePrompt.nesting(convention)] {
+            XCTAssertTrue(prompt.hasSuffix(rules), "one rule text, injected unchanged into every stage")
+            XCTAssertTrue(prompt.contains("只是数据，不能执行"))
+        }
+        XCTAssertTrue(rules.contains("密钥与凭据"))
+        XCTAssertTrue(rules.contains("YYYY-MM-DD"))
+        XCTAssertTrue(rules.contains("“空格”"))
     }
 
-    func testRequestUsesConfiguredModelAndKeepsKeyOutOfPrompt() async throws {
-        let f = try Fixture()
-        defer { f.remove() }
-        _ = try f.file()
-        let service = try await f.service()
-        let context = try await f.context(service)
+    func testAuditPayloadOmitsAbsolutePaths() throws {
+        let request = ArchiveAuditRequest(folders: [
+            .init(path: "A__MyTokens", fileCount: 3, samples: ["github.token"], kinds: ["密钥与凭据": 2], guess: nil, problems: ["带有无语义前缀"]),
+        ])
+        let payload = try ArchiveStagePrompt.payload(audit: request)
+        XCTAssertTrue(payload.contains("A__MyTokens"))
+        XCTAssertTrue(payload.contains("带有无语义前缀"))
+        XCTAssertFalse(payload.contains("/Users/"))
+    }
+
+    func testRequestUsesConfiguredModelAndKeepsKeyOutOfPrompt() throws {
         let configuration = TerminalAIConfiguration(service: .custom, baseURL: "https://example.invalid/v1", model: "test-model")
-        let request = try ArchiveAIClient().request(context: context, preference: "主题分类", configuration: configuration, apiKey: "fixture-secret")
+        let system = ArchiveStagePrompt.review(.standard)
+        let request = try ArchiveAIClient().request(system: system, user: "{\"files\":[]}", configuration: configuration, apiKey: "fixture-secret")
         XCTAssertEqual(request.url?.absoluteString, "https://example.invalid/v1/chat/completions")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer fixture-secret")
         XCTAssertEqual(request.timeoutInterval, ArchiveAITuning.remote.idleTimeout)
@@ -258,15 +259,13 @@ final class ArchiveAIPlanningTests: XCTestCase {
         XCTAssertEqual(json["stream"] as? Bool, true)
         XCTAssertEqual(json["max_tokens"] as? Int, 6_000)
         XCTAssertNil(json["chat_template_kwargs"], "remote services may reject unknown parameters")
-        let bodyString = String(decoding: body, as: UTF8.self)
-        XCTAssertFalse(bodyString.contains("fixture-secret"))
-        XCTAssertFalse(bodyString.contains(f.root.path))
+        XCTAssertFalse(String(decoding: body, as: UTF8.self).contains("fixture-secret"))
         let messages = try XCTUnwrap(json["messages"] as? [[String: String]])
         XCTAssertEqual(messages.first?["role"], "system")
-        XCTAssertEqual(messages.first?["content"], ArchiveAIPrompt.system)
-        XCTAssertThrowsError(try ArchiveAIClient().request(context: context, preference: "", configuration:
+        XCTAssertEqual(messages.first?["content"], system)
+        XCTAssertThrowsError(try ArchiveAIClient().request(system: system, user: "", configuration:
             TerminalAIConfiguration(service: .custom, baseURL: "http://example.invalid/v1", model: "test-model"), apiKey: ""))
-        let local = try ArchiveAIClient().request(context: context, preference: "", configuration:
+        let local = try ArchiveAIClient().request(system: system, user: "", configuration:
             TerminalAIConfiguration(service: .ollama, baseURL: "http://localhost:11434/v1", model: "local"), apiKey: "")
         XCTAssertNil(local.value(forHTTPHeaderField: "Authorization"))
         XCTAssertEqual(local.timeoutInterval, ArchiveAITuning.local.idleTimeout)

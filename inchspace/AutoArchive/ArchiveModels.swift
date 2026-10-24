@@ -228,8 +228,107 @@ nonisolated struct ArchiveState: Codable, Sendable {
     var settled: [String: ArchiveFingerprint]?
     /// Per-file results keyed by current path. A record whose fingerprint still matches is not reprocessed.
     var files: [String: ArchiveFileRecord]?
-    /// The folder layout equivalent folders were last merged in; consolidation runs again only after it changes.
-    var consolidatedStructure: String?
+    /// What the convention knows about each folder, keyed by absolute path: its category and naming pattern.
+    var folders: [String: ArchiveFolderRecord]?
+    /// The last structure audit; decides whether the next run audits the folder tree again.
+    var audit: ArchiveAuditState?
+    /// The local consistency check after the last run; its open items are handled first next time.
+    var consistency: ArchiveConsistencyReport?
+    /// The user's organizing preference in plain words; read as overrides of the convention.
+    var preference: String?
+
+    /// The convention every stage works under: the standard one with the user's preference applied.
+    var convention: ArchiveConvention { ArchiveConvention.parse(preference: preference ?? "") }
+
+    /// Whether this run starts with a structure audit: the folder layout changed, the last audit failed, or it left
+    /// items open that have not yet had three tries.
+    func needsAudit(structure: String) -> Bool {
+        guard let audit else { return true }
+        switch audit.status {
+        case .failed: return true
+        case .incomplete: return audit.structure != structure || audit.attempts < ArchiveAuditState.maxAttempts
+        case .complete: return audit.structure != structure
+        }
+    }
+}
+
+/// What the convention knows about one folder. The naming pattern is derived the first time the folder is organized
+/// and kept from then on, so every later file follows the same pattern instead of each batch inventing one.
+nonisolated struct ArchiveFolderRecord: Codable, Equatable, Sendable {
+    /// Absolute path.
+    var path: String
+    /// The dictionary category the folder holds (`ArchiveCategory.id`); nil for a project or an unknown folder.
+    var category: String?
+    /// True when the audit found the folder to be a project rather than a category.
+    var isProject: Bool?
+    var pattern: ArchiveNamingPattern?
+    var auditedAt: Date?
+    /// Share of the folder's own files that belong where they are, 0...1, from the last audit.
+    var purity: Double?
+}
+
+nonisolated struct ArchiveAuditState: Codable, Equatable, Sendable {
+    enum Status: String, Codable, Sendable {
+        case complete
+        /// The audit ran, but some folders or names still do not follow the convention.
+        case incomplete
+        /// The model could not be asked; only the dictionary's local decisions were applied.
+        case failed
+    }
+
+    /// Open items stop forcing a new audit after this many runs that could not settle them.
+    static let maxAttempts = 3
+
+    /// The folder layout the audit settled, as `ArchiveDirectoryFileSystem.signature`.
+    var structure: String
+    var status: Status
+    var message: String?
+    var finishedAt = Date()
+    /// Consecutive runs that ended with open items.
+    var attempts = 0
+}
+
+/// The local check after every run: no request to the model, only the convention applied to what is on disk.
+nonisolated struct ArchiveConsistencyReport: Codable, Equatable, Sendable {
+    struct Issue: Codable, Equatable, Identifiable, Sendable {
+        enum Kind: String, Codable, Sendable {
+            /// Two or more folders hold the same category.
+            case duplicateCategory
+            /// A category folder that is not at the category's canonical path.
+            case misplacedCategory
+            /// A folder name that breaks the directory convention.
+            case folderName
+            /// A file name that does not follow its folder's naming pattern.
+            case fileName
+        }
+
+        var kind: Kind
+        /// Relative to the workspace.
+        var path: String
+        var detail: String
+        var id: String { kind.rawValue + ":" + path }
+    }
+
+    var checkedAt = Date()
+    var issues: [Issue] = []
+    /// File-name issues beyond the ones listed; the list is capped to keep the record small.
+    var omittedFileIssues = 0
+
+    var isClean: Bool { issues.isEmpty }
+
+    func count(_ kind: Issue.Kind) -> Int {
+        issues.filter { $0.kind == kind }.count + (kind == .fileName ? omittedFileIssues : 0)
+    }
+
+    var summary: String {
+        guard !isClean else { return "目录与命名都符合规范" }
+        var parts: [String] = []
+        let duplicates = count(.duplicateCategory) + count(.misplacedCategory)
+        if duplicates > 0 { parts.append("\(duplicates) 个类别文件夹不唯一或不在规范位置") }
+        if count(.folderName) > 0 { parts.append("\(count(.folderName)) 个文件夹名不规范") }
+        if count(.fileName) > 0 { parts.append("\(count(.fileName)) 个文件名不符合所在文件夹的模式") }
+        return parts.joined(separator: "，")
+    }
 }
 
 nonisolated struct ArchiveScanResult: Sendable {

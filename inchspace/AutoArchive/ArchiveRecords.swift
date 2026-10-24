@@ -42,17 +42,50 @@ extension ArchiveService {
         }
     }
 
-    /// The current folder layout digest, compared with `consolidatedStructure` to decide whether merging
-    /// equivalent folders needs another look.
+    /// The current folder layout digest, compared with the last audit's to decide whether the structure needs
+    /// another look.
     func structureSignature() throws -> String {
         try withAccess(state.configuration) { config in
             ArchiveDirectoryFileSystem.signature(try ArchiveDirectoryFileSystem.inventory(config).0)
         }
     }
 
-    func markConsolidated(_ structure: String) throws {
+    func saveFolderRecords(_ records: [ArchiveFolderRecord]) throws {
+        guard !records.isEmpty else { return }
         var next = state
-        next.consolidatedStructure = structure
+        var folders = next.folders ?? [:]
+        for record in records { folders[record.path] = record }
+        next.folders = folders
+        try commit(next)
+    }
+
+    /// Replaces every folder record inside `root` with `records`; folders that are gone lose theirs.
+    func replaceFolderRecords(_ records: [ArchiveFolderRecord], inside root: String) throws {
+        var next = state
+        var folders = (next.folders ?? [:]).filter { $0.key != root && !$0.key.hasPrefix(root + "/") }
+        for record in records { folders[record.path] = record }
+        next.folders = folders
+        try commit(next)
+    }
+
+    func saveAudit(_ audit: ArchiveAuditState?) throws {
+        var next = state
+        next.audit = audit
+        try commit(next)
+    }
+
+    func saveConsistency(_ report: ArchiveConsistencyReport) throws {
+        var next = state
+        next.consistency = report
+        try commit(next)
+    }
+
+    /// A new preference changes the convention, so the next run audits the whole structure again.
+    func setPreference(_ preference: String?) throws {
+        var next = state
+        let text = preference?.trimmingCharacters(in: .whitespacesAndNewlines)
+        next.preference = text?.isEmpty == false ? String(text!.prefix(2_000)) : nil
+        next.audit = nil
         try commit(next)
     }
 
@@ -165,6 +198,7 @@ extension ArchiveService {
             return result
         }
         state.files = state.files.map { remap($0) { $0.path = $1 } }
+        state.folders = state.folders.map { remap($0) { $0.path = $1 } }
         state.settled = state.settled.map { remap($0) }
         state.cache = remap(state.cache) { $0.url = URL(fileURLWithPath: $1) }
         state.observations = remap(state.observations)

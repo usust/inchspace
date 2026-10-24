@@ -22,13 +22,13 @@ nonisolated enum ArchiveFileKind: String, CaseIterable, Sendable {
         return size >= largeFileBytes ? .large : nil
     }
 
-    /// The folder files of this kind are collected in when no existing one fits.
-    var folderName: String {
+    /// The convention's category this kind belongs to; its canonical path is where such files live.
+    var category: String {
         switch self {
-        case .audio: "音乐"
-        case .video: "视频"
-        case .installer: "安装包与镜像"
-        case .large: "大文件"
+        case .audio: ArchiveCategory.music
+        case .video: ArchiveCategory.video
+        case .installer: ArchiveCategory.installer
+        case .large: ArchiveCategory.large
         }
     }
 
@@ -39,20 +39,5 @@ nonisolated enum ArchiveFileKind: String, CaseIterable, Sendable {
         case .installer: "安装包"
         case .large: "大文件"
         }
-    }
-
-    /// Folder names that already mean this kind, compared by `ArchiveFileSystem.nameKey`.
-    var aliases: [String] {
-        switch self {
-        case .audio: ["音乐", "音频", "歌曲", "单曲", "Music", "Audio", "Songs", "iTunes"]
-        case .video: ["视频", "影片", "电影", "Videos", "Video", "Movies", "Movie"]
-        case .installer: ["安装包与镜像", "安装包", "镜像", "软件", "Installers", "Software", "Apps", "ISO", "Disk Images"]
-        case .large: ["大文件", "Large Files"]
-        }
-    }
-
-    func matches(folderName name: String) -> Bool {
-        let key = ArchiveFileSystem.nameKey(name)
-        return aliases.contains { ArchiveFileSystem.nameKey($0) == key }
     }
 }

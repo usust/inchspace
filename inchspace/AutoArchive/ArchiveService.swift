@@ -46,7 +46,10 @@ actor ArchiveService {
                 for (path, record) in files where !record.isResolved { files[path]?.structure = nil }
                 next.files = files
             }
-            next.consolidatedStructure = nil
+            // A new scope is audited from scratch; folder records of the old one no longer describe anything.
+            next.audit = nil
+            next.consistency = nil
+            next.folders = nil
             for index in next.suggestions.indices where next.suggestions[index].status == .pending {
                 next.suggestions[index].status = .stale
             }

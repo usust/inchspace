@@ -147,8 +147,10 @@ final class RunnerTests: XCTestCase {
         store.add(task)
         store.start(task.id)
 
-        for _ in 0..<50 {
-            if store.snapshots[task.id]?.lastExitCode != nil { break }
+        // The exit status can arrive before the last output is read, especially under a loaded parallel test run.
+        for _ in 0..<100 {
+            let snapshot = store.snapshots[task.id]
+            if snapshot?.lastExitCode != nil, snapshot?.logs.contains(where: { $0.message.contains("runner-ready") }) == true { break }
             try await Task.sleep(for: .milliseconds(40))
         }
 

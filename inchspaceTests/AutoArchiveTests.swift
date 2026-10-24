@@ -985,6 +985,9 @@ final class AutoArchiveTests: XCTestCase {
                 includingPropertiesForKeys: [.isRegularFileKey], options: []))
             var contents: [String: Data] = [:]
             for case let url as URL in enumerator {
+                // SQLite's shared-memory index is rebuilt by any transaction, even one that writes nothing; it
+                // holds no data. The database and its write-ahead log are still compared.
+                guard !url.lastPathComponent.hasSuffix("-shm") else { continue }
                 if try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true {
                     contents[String(url.path.dropFirst(root.path.count))] = try Data(contentsOf: url)
                 }

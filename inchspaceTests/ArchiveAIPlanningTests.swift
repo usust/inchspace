@@ -516,10 +516,13 @@ final class ArchiveAIPlanningTests: XCTestCase {
         {"summary":"无需改动","directories":[],"files":[]}
         """
         XCTAssertTrue(try ArchiveAIPrompt.decode(valid).files.isEmpty)
+        // Local models wrap answers in code fences; only the JSON object inside is read, and it is held to the same
+        // strict shape.
+        XCTAssertTrue(try ArchiveAIPrompt.decode("```json\n\(valid)\n```").files.isEmpty)
         for invalid in [
             "{\"summary\":\"x\",\"directories\":[],\"files\":[],\"command\":\"rm -rf\"}",
             "{\"summary\":\"x\",\"directories\":[{\"action\":\"removeAll\",\"rootID\":\"x\",\"relativePath\":\"x\",\"reason\":\"x\"}],\"files\":[]}",
-            "```json\n\(valid)\n```",
+            "```json\n{\"summary\":\"x\",\"directories\":[],\"files\":[],\"command\":\"rm -rf\"}\n```",
             "{\"summary\":true,\"directories\":[],\"files\":[]}",
         ] { XCTAssertThrowsError(try ArchiveAIPrompt.decode(invalid)) }
     }

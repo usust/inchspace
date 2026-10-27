@@ -147,10 +147,10 @@ final class RunnerTests: XCTestCase {
         store.add(task)
         store.start(task.id)
 
-        // The exit status can arrive before the last output is read, especially under a loaded parallel test run.
+        // A completed task must already contain its final output.
         for _ in 0..<100 {
             let snapshot = store.snapshots[task.id]
-            if snapshot?.lastExitCode != nil, snapshot?.logs.contains(where: { $0.message.contains("runner-ready") }) == true { break }
+            if snapshot?.lastExitCode != nil { break }
             try await Task.sleep(for: .milliseconds(40))
         }
 
@@ -158,4 +158,38 @@ final class RunnerTests: XCTestCase {
         XCTAssertTrue(store.snapshots[task.id]?.logs.contains(where: { $0.message.contains("runner-ready") }) == true)
         try? FileManager.default.removeItem(at: fileURL)
     }
+
+    func testRapidTasksDrainBothStreamsBeforeReportingExit() async throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("inchspace-runner-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        let store = RunnerStore(persistence: RunnerPersistence(fileURL: fileURL))
+        let tasks = (0..<12).map { index in
+            RunnerTask(
+                name: "Quick task \(index)",
+                command: "printf 'stdout-\(index)\\n'; printf 'stderr-\(index)\\n' >&2",
+                workingDirectoryPath: "/tmp",
+                launchMode: .temporary,
+                environment: []
+            )
+        }
+        for task in tasks {
+            store.add(task)
+            store.start(task.id)
+        }
+        var pending = Set(tasks.map(\.id))
+        for _ in 0..<250 {
+            for (index, task) in tasks.enumerated() where pending.contains(task.id) {
+                guard let snapshot = store.snapshots[task.id], let exitCode = snapshot.lastExitCode else { continue }
+                XCTAssertEqual(exitCode, 0)
+                XCTAssertTrue(snapshot.logs.contains { $0.message == "stdout-\(index)" && !$0.isError })
+                XCTAssertTrue(snapshot.logs.contains { $0.message == "stderr-\(index)" && $0.isError })
+                pending.remove(task.id)
+            }
+            if pending.isEmpty { break }
+            try await Task.sleep(for: .milliseconds(40))
+        }
+        XCTAssertTrue(pending.isEmpty, "All short tasks should finish and preserve both output streams.")
+    }
+
 }

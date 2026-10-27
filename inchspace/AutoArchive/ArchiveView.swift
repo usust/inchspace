@@ -9,7 +9,6 @@ struct ArchiveView: View {
 
     var body: some View {
         ZStack {
-            AppPageBackground()
             switch model.screen {
             case .loading:
                 ArchiveLoadingView(model: model)
@@ -21,6 +20,8 @@ struct ArchiveView: View {
                     .transition(.opacity)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(AppPageBackground())
         .animation(reduceMotion ? nil : AppMotion.transition, value: model.screen)
         .task {
             model.attach(settings: aiSettings)

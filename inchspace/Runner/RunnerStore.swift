@@ -127,22 +127,25 @@ final class RunnerStore: ObservableObject {
                 securityScopedURL: hasAccess ? directoryURL : nil
             )
             processes[id] = managed
-            outputPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-                let data = handle.availableData
-                guard !data.isEmpty else { return }
-                let text = String(decoding: data, as: UTF8.self)
-                Task { @MainActor [weak self] in self?.appendOutput(id, text, isError: false) }
-            }
-            errorPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-                let data = handle.availableData
-                guard !data.isEmpty else { return }
-                let text = String(decoding: data, as: UTF8.self)
-                Task { @MainActor [weak self] in self?.appendOutput(id, text, isError: true) }
-            }
             process.terminationHandler = { [weak self] process in
-                Task { @MainActor [weak self] in self?.processDidExit(id, code: process.terminationStatus) }
+                Task { @MainActor [weak self] in
+                    await self?.processDidExit(id, code: process.terminationStatus)
+                }
             }
             try process.run()
+            // Each stream has one reader. Wait for both to reach EOF before publishing the exit status.
+            managed.outputTask = Task.detached(priority: .utility) { [weak self] in
+                let handle = outputPipe.fileHandleForReading
+                while let data = try? handle.read(upToCount: 4096), !data.isEmpty {
+                    await self?.appendOutput(id, String(decoding: data, as: UTF8.self), isError: false)
+                }
+            }
+            managed.errorTask = Task.detached(priority: .utility) { [weak self] in
+                let handle = errorPipe.fileHandleForReading
+                while let data = try? handle.read(upToCount: 4096), !data.isEmpty {
+                    await self?.appendOutput(id, String(decoding: data, as: UTF8.self), isError: true)
+                }
+            }
             snapshots[id]?.state = .running
             snapshots[id]?.pid = process.processIdentifier
             snapshots[id]?.startedAt = Date()
@@ -332,10 +335,11 @@ final class RunnerStore: ObservableObject {
         }
     }
 
-    private func processDidExit(_ id: UUID, code: Int32) {
-        guard let managed = processes.removeValue(forKey: id) else { return }
-        managed.outputPipe.fileHandleForReading.readabilityHandler = nil
-        managed.errorPipe.fileHandleForReading.readabilityHandler = nil
+    private func processDidExit(_ id: UUID, code: Int32) async {
+        guard let managed = processes[id] else { return }
+        await managed.outputTask?.value
+        await managed.errorTask?.value
+        processes[id] = nil
         managed.finishAccess()
         snapshots[id]?.pid = nil
         snapshots[id]?.cpuPercent = 0
@@ -414,6 +418,8 @@ private final class ManagedRunnerProcess: @unchecked Sendable {
     let outputPipe: Pipe
     let errorPipe: Pipe
     let securityScopedURL: URL?
+    var outputTask: Task<Void, Never>?
+    var errorTask: Task<Void, Never>?
     var restartWhenFinished = false
 
     init(process: Process, outputPipe: Pipe, errorPipe: Pipe, securityScopedURL: URL?) {

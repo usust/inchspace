@@ -3,6 +3,21 @@
     <channel>
         <title>inchspace</title>
         <item>
+            <title>0.0.15</title>
+            <pubDate>Tue, 27 Oct 2026 10:33:00 +0800</pubDate>
+            <link>https://github.com/usust/inchspace</link>
+            <sparkle:version>10</sparkle:version>
+            <sparkle:shortVersionString>0.0.15</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# inchspace 0.0.15
+
+- 调整自动归档页面的背景与尺寸布局，使页面内容铺满可用空间。
+- 修复运行器中短任务结束时可能丢失最后一段日志的问题，确保标准输出和错误输出读取完成后再显示退出状态。
+- 增加多个快速任务同时结束的回归测试，验证两路日志均被保留。
+]]></description>
+            <enclosure url="https://github.com/usust/inchspace/releases/download/v0.0.15/inchspace-0.0.15.dmg" length="11208378" type="application/octet-stream" sparkle:edSignature="ZFHV1B7iLm6aMjl8cJMEn12nm9AEegiztvwN5GcMtJPYelAUwrEMqu8pd+BHIebvapC2UnfnrzAee1S2xMN9AQ=="/>
+        </item>
+        <item>
             <title>0.0.14</title>
             <pubDate>Sat, 24 Oct 2026 14:08:57 +0800</pubDate>
             <link>https://github.com/usust/inchspace</link>
@@ -19,15 +34,6 @@
             <sparkle:shortVersionString>0.0.12</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
             <enclosure url="https://github.com/usust/inchspace/releases/download/v0.0.12/inchspace-0.0.12.dmg" length="9095129" type="application/octet-stream" sparkle:edSignature="jg3FSnUshKfc780UikJYAv/eI992zr82MQooJtOOj1X/pnhSszUVWFkwxV7KJFL8ALDpWQDC3Tt7qefWZbmHBA=="/>
-        </item>
-        <item>
-            <title>0.0.11</title>
-            <pubDate>Sat, 22 Aug 2026 00:04:03 +0800</pubDate>
-            <link>https://github.com/usust/inchspace</link>
-            <sparkle:version>7</sparkle:version>
-            <sparkle:shortVersionString>0.0.11</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/usust/inchspace/releases/download/v0.0.11/inchspace-0.0.11.dmg" length="9498693" type="application/octet-stream" sparkle:edSignature="w/lrQBQHZvtjVjHmIYTYTHJ7wqgPoE7R1MSdUmzOjx5qQg0LQIp/ShV/HKt8tLtiInVvlTqqp39U4ttP5KolBA=="/>
         </item>
     </channel>
 </rss>

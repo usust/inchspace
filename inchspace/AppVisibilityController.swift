@@ -34,7 +34,7 @@ enum WindowPositionPreference: String, Codable, CaseIterable, Identifiable {
 
 /// 可以安全地在多台 Mac 之间共享的用户偏好。
 /// Dock、菜单栏和快捷键属于设备运行方式，刻意不包含在这里。
-struct SyncedAppPreferences: Codable, Equatable {
+struct PortableAppPreferences: Codable, Equatable {
     static let currentVersion = 1
 
     var version: Int = Self.currentVersion
@@ -76,7 +76,6 @@ final class AppWindowPreferences: ObservableObject {
         static let showsMenuBarIcon = "window.showsMenuBarIcon"
         static let position = "window.position"
         static let shortcut = "window.globalShortcut"
-        static let syncedModifiedAt = "window.syncedPreferencesModifiedAt"
     }
 
     @Published private(set) var hidesAfterOpen: Bool
@@ -84,7 +83,6 @@ final class AppWindowPreferences: ObservableObject {
     @Published private(set) var showsMenuBarIcon: Bool
     @Published private(set) var position: WindowPositionPreference
     @Published private(set) var shortcut: AppGlobalShortcut
-    @Published private(set) var syncedModifiedAt: Date?
 
     private let defaults: UserDefaults
 
@@ -107,11 +105,10 @@ final class AppWindowPreferences: ObservableObject {
         } else {
             shortcut = .defaultShortcut
         }
-        syncedModifiedAt = defaults.object(forKey: Key.syncedModifiedAt) as? Date
     }
 
-    var syncedPreferences: SyncedAppPreferences {
-        SyncedAppPreferences(
+    var portablePreferences: PortableAppPreferences {
+        PortableAppPreferences(
             hidesAfterOpen: hidesAfterOpen,
             windowPosition: position
         )
@@ -121,7 +118,6 @@ final class AppWindowPreferences: ObservableObject {
         guard hidesAfterOpen != value else { return }
         hidesAfterOpen = value
         defaults.set(value, forKey: Key.hidesAfterOpen)
-        markSyncedPreferencesModified()
     }
 
     func setShowsDockIcon(_ value: Bool) {
@@ -138,7 +134,6 @@ final class AppWindowPreferences: ObservableObject {
         guard position != value else { return }
         position = value
         defaults.set(value.rawValue, forKey: Key.position)
-        markSyncedPreferencesModified()
     }
 
     func setShortcut(_ value: AppGlobalShortcut) {
@@ -148,21 +143,14 @@ final class AppWindowPreferences: ObservableObject {
         }
     }
 
-    /// 接收云端偏好时不改变当前设备的 Dock、菜单栏和快捷键配置。
-    func applySyncedPreferences(_ value: SyncedAppPreferences, modifiedAt: Date) {
+    /// 导入仅改变可迁移偏好，不触及当前设备的驻留方式和快捷键。
+    func applyPortablePreferences(_ value: PortableAppPreferences) {
         hidesAfterOpen = value.hidesAfterOpen
         position = value.windowPosition
         defaults.set(value.hidesAfterOpen, forKey: Key.hidesAfterOpen)
         defaults.set(value.windowPosition.rawValue, forKey: Key.position)
-        syncedModifiedAt = modifiedAt
-        defaults.set(modifiedAt, forKey: Key.syncedModifiedAt)
     }
 
-    private func markSyncedPreferencesModified() {
-        let now = Date()
-        syncedModifiedAt = now
-        defaults.set(now, forKey: Key.syncedModifiedAt)
-    }
 }
 
 extension Notification.Name {

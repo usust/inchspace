@@ -28,18 +28,13 @@ final class LaunchpadRepository: ObservableObject {
     @Published private(set) var persistenceError: String?
 
     private let persistence: LaunchpadPersistenceService
-    private let syncManager: ICloudSyncManager?
     private var hasReadableLocalData = true
     private var interactiveSnapshot: LaunchpadLibrary?
     private var pendingSaveTask: Task<Void, Never>?
 
-    init(
-        persistence: LaunchpadPersistenceService? = nil,
-        syncManager: ICloudSyncManager? = nil
-    ) {
+    init(persistence: LaunchpadPersistenceService? = nil) {
         let persistence = persistence ?? LaunchpadPersistenceService()
         self.persistence = persistence
-        self.syncManager = syncManager
         do {
             let loaded = try persistence.load()
             let source = loaded.map(Self.removingLegacyDefaultContent) ?? LaunchpadLibrary()
@@ -59,14 +54,26 @@ final class LaunchpadRepository: ObservableObject {
         }
     }
 
-    func startCloudSync() async {
-        guard syncManager != nil else { return }
-        await synchronizeWithCloud(allowsUpload: true)
+    func configurationSnapshot() throws -> LaunchpadLibrary {
+        guard hasReadableLocalData else {
+            throw ConfigurationImportError.unreadableLocalData
+        }
+        return interactiveSnapshot ?? library
     }
 
-    func refreshCloudData() async {
-        guard syncManager != nil else { return }
-        await synchronizeWithCloud(allowsUpload: false)
+    func replaceConfiguration(_ replacement: LaunchpadLibrary) throws {
+        pendingSaveTask?.cancel()
+        pendingSaveTask = nil
+        do {
+            try persistence.save(replacement)
+        } catch {
+            scheduleSave()
+            throw error
+        }
+        interactiveSnapshot = nil
+        library = replacement
+        hasReadableLocalData = true
+        persistenceError = nil
     }
 
     func item(withID id: UUID) -> LaunchItem? {
@@ -452,6 +459,7 @@ final class LaunchpadRepository: ObservableObject {
     }
 
     func saveImmediately() {
+        guard hasReadableLocalData else { return }
         pendingSaveTask?.cancel()
         pendingSaveTask = nil
         do {
@@ -459,7 +467,6 @@ final class LaunchpadRepository: ObservableObject {
             try persistence.save(interactiveSnapshot ?? library)
             hasReadableLocalData = true
             persistenceError = nil
-            syncManager?.scheduleUpload(interactiveSnapshot ?? library)
         } catch {
             persistenceError = "布局保存失败：\(error.localizedDescription)"
         }
@@ -537,26 +544,6 @@ final class LaunchpadRepository: ObservableObject {
             try? await Task.sleep(nanoseconds: 250_000_000)
             guard !Task.isCancelled else { return }
             self?.saveImmediately()
-        }
-    }
-
-    private func synchronizeWithCloud(allowsUpload: Bool) async {
-        let localDate = hasReadableLocalData ? persistence.modificationDate : nil
-        if let remote = await syncManager?.synchronize(
-            localLibrary: library,
-            localModifiedAt: localDate,
-            allowsUpload: allowsUpload && hasReadableLocalData
-        ) {
-            let migratedRemote = Self.removingLegacyDefaultContent(remote)
-            let repaired = Self.validated(migratedRemote.restoringDeviceState(from: library))
-            library = repaired
-            do {
-                try persistence.save(repaired)
-                hasReadableLocalData = true
-                persistenceError = nil
-            } catch {
-                persistenceError = "iCloud 数据已获取，但暂时无法保存到本机：\(error.localizedDescription)"
-            }
         }
     }
 

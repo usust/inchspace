@@ -17,6 +17,8 @@ struct WorkbenchView: View {
     @State private var renameRequest: RenameRequest?
     @State private var websiteRequest: WebsiteEditRequest?
     @State private var presentedError: PresentedError?
+    @State private var unavailableItem: LaunchItem?
+    @State private var unavailableMessage = ""
     @State private var applicationOpenPanel: NSOpenPanel?
     @State private var currentCapacity = 24
     @EnvironmentObject private var visibilityController: AppVisibilityController
@@ -109,6 +111,17 @@ struct WorkbenchView: View {
         }
         .alert(item: $presentedError) { error in
             Alert(title: Text(error.title), message: Text(error.message), dismissButton: .default(Text("好")))
+        }
+        .confirmationDialog("无法打开入口", isPresented: Binding(
+            get: { unavailableItem != nil },
+            set: { if !$0 { unavailableItem = nil } }
+        ), titleVisibility: .visible) {
+            if let item = unavailableItem {
+                Button("重新选择\(item.category.title)…") { chooseReplacement(for: item) }
+            }
+            Button("取消", role: .cancel) { unavailableItem = nil }
+        } message: {
+            Text("\(unavailableMessage)\n重新选择会保留此入口的名称、分组和位置，不会自动打开目标。")
         }
         .onExitCommand {
             if openedGroupID != nil {
@@ -222,6 +235,38 @@ struct WorkbenchView: View {
                 visibilityController.hideAfterSuccessfulOpen(destination)
             } catch {
                 repository.markUnavailable(itemID: item.id)
+                if item.category == .website {
+                    present(error)
+                } else {
+                    unavailableMessage = error.localizedDescription
+                    unavailableItem = item
+                }
+            }
+        }
+    }
+
+    private func chooseReplacement(for item: LaunchItem) {
+        unavailableItem = nil
+        let panel = NSOpenPanel()
+        panel.title = "重新选择\(item.category.title)"
+        panel.prompt = "使用此目标"
+        panel.allowsMultipleSelection = false
+        panel.canChooseFiles = item.category == .application
+        panel.canChooseDirectories = item.category == .directory
+        if item.category == .application { panel.allowedContentTypes = [.application] }
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                let bookmark = try SecurityScopedBookmarkService.makeBookmark(for: url)
+                let target: LaunchTarget
+                if item.category == .application {
+                    target = .application(bundleIdentifier: Bundle(url: url)?.bundleIdentifier ?? "", path: url.path)
+                } else {
+                    target = .directory(path: url.path)
+                }
+                try repository.updateItem(id: item.id, target: target, bookmarkData: bookmark)
+                LaunchpadIconProvider.shared.invalidate(item)
+            } catch {
                 present(error)
             }
         }

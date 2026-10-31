@@ -22,8 +22,7 @@ struct RunnerView: View {
 
     @ObservedObject var store: RunnerStore
     @State private var page: Page = .dashboard
-    @State private var showsTaskEditor = false
-    @State private var editingTask: RunnerTask?
+    @State private var taskEditor: RunnerTaskEditorRequest?
     @State private var logTaskID: UUID?
 
     var body: some View {
@@ -46,10 +45,11 @@ struct RunnerView: View {
                 }
             }
         }
-        .sheet(isPresented: $showsTaskEditor) {
-            RunnerTaskEditor(task: editingTask) { task in
-                if editingTask == nil { store.add(task) } else { store.update(task) }
+        .sheet(item: $taskEditor) { request in
+            RunnerTaskEditor(task: request.task) { task in
+                request.save(task, to: store)
             }
+            .id(request.id)
         }
         .sheet(item: $logTaskID) { id in
             if let task = store.tasks.first(where: { $0.id == id }) {
@@ -81,13 +81,11 @@ struct RunnerView: View {
     }
 
     private func edit(_ task: RunnerTask) {
-        editingTask = task
-        showsTaskEditor = true
+        taskEditor = RunnerTaskEditorRequest(task: task)
     }
 
     private func presentNewTaskEditor() {
-        editingTask = nil
-        showsTaskEditor = true
+        taskEditor = RunnerTaskEditorRequest(task: nil)
     }
 }
 

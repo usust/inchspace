@@ -6,19 +6,15 @@
 import AppKit
 import Carbon.HIToolbox
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @EnvironmentObject private var visibilityController: AppVisibilityController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @ObservedObject var syncManager: ICloudSyncManager
+    @ObservedObject var repository: LaunchpadRepository
     @ObservedObject var updateManager: UpdateManager
     @ObservedObject var terminalManager: TerminalManager
     @Binding var selectedCategory: SettingsTab
-    let onSyncConfigurationChanged: () -> Void
-    @State private var isChoosingFolder = false
-    @State private var isConfirmingFolderRemoval = false
-    @State private var configurationError: String?
+    @Namespace private var navigationNamespace
 
     private var generalSettings: some View {
         Group {
@@ -96,87 +92,6 @@ struct SettingsView: View {
         }
     }
 
-    private var syncSettings: some View {
-        Section("iCloud 与数据") {
-            LabeledContent {
-                VStack(alignment: .trailing, spacing: 4) {
-                    HStack(spacing: 6) {
-                        if syncManager.status == .syncing {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Image(systemName: statusSymbol)
-                        }
-                        Text(statusTitle)
-                    }
-                    .foregroundStyle(statusColor)
-                    if let date = syncManager.lastSuccessfulSync {
-                        Text("最后同步：\(date.formatted(date: .abbreviated, time: .shortened))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            } label: {
-                SettingsPreferenceLabel(
-                    title: "iCloud Drive",
-                    description: "同步程序、目录、网站、工作台布局及通用应用偏好到所选文件夹",
-                    systemImage: "icloud"
-                )
-            }
-
-            Toggle("使用 iCloud 同步", isOn: Binding(
-                get: { syncManager.isEnabled },
-                set: { enabled in
-                    syncManager.setEnabled(enabled)
-                    if enabled { onSyncConfigurationChanged() }
-                }
-            ))
-            .disabled(!syncManager.isConfigured)
-
-            LabeledContent("同步文件夹") {
-                if let folderName = syncManager.selectedFolderName {
-                    HStack(spacing: 8) {
-                        Text(folderName)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                        Menu {
-                            Button("更改同步文件夹…") {
-                                isChoosingFolder = true
-                            }
-                            Button("在 Finder 中显示") {
-                                revealFolderInFinder()
-                            }
-                            Divider()
-                            Button("停止使用此文件夹…", role: .destructive) {
-                                isConfirmingFolderRemoval = true
-                            }
-                        } label: {
-                            Image(systemName: "ellipsis.circle")
-                        }
-                        .menuStyle(.borderlessButton)
-                        .help("管理同步文件夹")
-                        .accessibilityLabel("管理同步文件夹")
-                    }
-                } else {
-                    HStack(spacing: 8) {
-                        Text("未选择")
-                            .foregroundStyle(.secondary)
-                        Button("选择…") {
-                            isChoosingFolder = true
-                        }
-                    }
-                }
-            }
-
-            if case let .error(message) = syncManager.status {
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-        }
-    }
-
     private var categoryPicker: some View {
         Picker("设置分类", selection: $selectedCategory) {
             ForEach(SettingsTab.allCases) { category in
@@ -195,38 +110,40 @@ struct SettingsView: View {
         VStack(spacing: 6) {
             ForEach(SettingsTab.allCases) { category in
                 Button {
-                    selectedCategory = category
+                    withAnimation(reduceMotion ? nil : AppMotion.transition) {
+                        selectedCategory = category
+                    }
                 } label: {
-                    HStack(spacing: 8) {
-                        AppIconTile(
-                            symbol: category.symbol,
-                            color: selectedCategory == category ? .accentColor : .secondary,
-                            size: 28
-                        )
+                    HStack(spacing: 12) {
+                        Image(systemName: category.symbol)
+                            .font(.system(size: 17, weight: .medium))
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(selectedCategory == category ? Color.accentColor : .secondary)
+                            .frame(width: 24)
                         Text(category.title)
                             .font(.body.weight(selectedCategory == category ? .semibold : .regular))
+                            .lineLimit(1)
                         Spacer(minLength: 0)
-                        Image(systemName: "checkmark")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(Color.accentColor)
-                            .opacity(selectedCategory == category ? 1 : 0)
-                            .accessibilityHidden(true)
                     }
                     .foregroundStyle(.primary)
-                    .padding(8)
-                    .background(
-                        Color.accentColor.opacity(selectedCategory == category ? 0.10 : 0),
-                        in: RoundedRectangle(cornerRadius: AppLayout.cardRadius)
-                    )
-                    .animation(reduceMotion ? nil : AppMotion.feedback, value: selectedCategory)
+                    .padding(.horizontal, 14)
+                    .frame(height: 48)
+                    .background {
+                        if selectedCategory == category {
+                            RoundedRectangle(cornerRadius: 14)
+                                .fill(Color.accentColor.opacity(0.12))
+                                .matchedGeometryEffect(id: "selection", in: navigationNamespace)
+                        }
+                    }
+                    .contentShape(RoundedRectangle(cornerRadius: 14))
                 }
                 .buttonStyle(AppCardButtonStyle())
                 .accessibilityAddTraits(selectedCategory == category ? [.isSelected] : [])
             }
         }
-        .padding(8)
-        .frame(width: 148)
-        .appSurface()
+        .padding(10)
+        .frame(width: 196)
+        .settingsGlassSurface()
         .accessibilityElement(children: .contain)
         .accessibilityLabel("设置分类")
     }
@@ -243,9 +160,6 @@ struct SettingsView: View {
                 settings: terminalManager.aiSettings,
                 isVisible: selectedCategory == .ai
             )
-            if selectedCategory == .sync {
-                syncSettings
-            }
             if selectedCategory == .updates {
                 UpdateSettingsSection(updateManager: updateManager)
             }
@@ -259,10 +173,12 @@ struct SettingsView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                AppFeatureTitle("设置", subtitle: "按你的习惯，调整窗口、终端与数据同步。")
+                AppFeatureTitle("设置")
                 Spacer()
             }
-            .appFeatureHeaderBackground()
+            .padding(.horizontal, 28)
+            .padding(.top, 24)
+            .padding(.bottom, 8)
 
             GeometryReader { geometry in
                 let isWide = geometry.size.width >= 760
@@ -279,88 +195,47 @@ struct SettingsView: View {
                             categoryPicker
                         }
                     }
-                    settingsForm
+                    ZStack(alignment: .top) {
+                        settingsForm
+                            .opacity(selectedCategory == .backup ? 0 : 1)
+                            .allowsHitTesting(selectedCategory != .backup)
+                            .disabled(selectedCategory == .backup)
+                            .accessibilityHidden(selectedCategory == .backup)
+                        if selectedCategory == .backup {
+                            ScrollView {
+                                ConfigurationBackupSettingsSection(repository: repository, preferences: visibilityController.preferences)
+                                    .frame(maxWidth: 760)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(8)
+                            }
+                        }
+                    }
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 24)
                 .padding(.top, 16)
+                .padding(.bottom, 20)
             }
         }
         .navigationTitle("设置")
-        .task { await syncManager.refreshAccountStatus() }
-        .fileImporter(
-            isPresented: $isChoosingFolder,
-            allowedContentTypes: [.folder],
-            allowsMultipleSelection: false
-        ) { result in
-            do {
-                guard let url = try result.get().first else { return }
-                try syncManager.configureFolder(url)
-                configurationError = nil
-                onSyncConfigurationChanged()
-            } catch {
-                configurationError = error.localizedDescription
-            }
-        }
-        .alert("无法使用同步文件夹", isPresented: Binding(
-            get: { configurationError != nil },
-            set: { if !$0 { configurationError = nil } }
-        )) {
-            Button("好") { configurationError = nil }
-        } message: {
-            Text(configurationError ?? "未知错误")
-        }
-        .confirmationDialog(
-            "停止使用此同步文件夹？",
-            isPresented: $isConfirmingFolderRemoval
-        ) {
-            Button("停止使用", role: .destructive) {
-                syncManager.removeFolder()
-            }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("停止后，应用将不再使用“\(syncManager.selectedFolderName ?? "此文件夹")”作为同步位置。本机数据不会被删除。")
+    }
+}
+
+private struct SettingsGlassSurface: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        if reduceTransparency || contrast == .increased {
+            content.appSurface(cornerRadius: 22)
+        } else {
+            content.glassEffect(.regular, in: .rect(cornerRadius: 22))
         }
     }
+}
 
-    private var statusTitle: String {
-        switch syncManager.status {
-        case .notConfigured: "未选择同步文件夹"
-        case .disabled: "同步已关闭"
-        case .unavailable: "iCloud 不可用"
-        case .syncing: "正在同步…"
-        case .synced: "已同步"
-        case .error: "同步失败"
-        }
-    }
-
-    private func revealFolderInFinder() {
-        do {
-            try syncManager.revealFolderInFinder()
-        } catch {
-            configurationError = error.localizedDescription
-        }
-    }
-
-    private var statusSymbol: String {
-        switch syncManager.status {
-        case .notConfigured: "folder.badge.questionmark"
-        case .disabled: "icloud.slash"
-        case .unavailable: "exclamationmark.icloud"
-        case .syncing: "arrow.triangle.2.circlepath"
-        case .synced: "checkmark.icloud"
-        case .error: "exclamationmark.icloud"
-        }
-    }
-
-    private var statusColor: Color {
-        switch syncManager.status {
-        case .notConfigured: .secondary
-        case .synced: .green
-        case .error: Color(nsColor: .systemRed)
-        case .unavailable: .orange
-        case .disabled: .secondary
-        case .syncing: .primary
-        }
+extension View {
+    func settingsGlassSurface() -> some View {
+        modifier(SettingsGlassSurface())
     }
 }
 

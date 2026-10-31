@@ -117,7 +117,55 @@ private struct ArchiveOnboardingView: View {
 
 // MARK: - Workbench
 
-private struct ArchiveWorkbenchView: View {
+/// Column minimums plus room for native table insets, spacing and the scrollbar.
+enum ArchiveWorkbenchLayout {
+    static let tableColumnMinimums: [CGFloat] = [200, 150, 50, 56, 60, 100]
+    // Actual minima total 616; allow 80 more for native column spacing, insets and scrollbar.
+    static let browserMinimumWidth = tableColumnMinimums.reduce(0, +) + 80
+    static let sideWidth: CGFloat = 330
+    static let wideMinimumWidth = 40 + 16 + sideWidth + browserMinimumWidth
+
+    static func isWide(width: CGFloat) -> Bool { width >= wideMinimumWidth }
+    static func browserHeight(availableHeight: CGFloat) -> CGFloat {
+        min(560, max(320, availableHeight - 150))
+    }
+}
+
+struct ArchiveWorkbenchHeader<Actions: View>: View {
+    let subtitle: String
+    @ViewBuilder var actions: (Bool) -> Actions
+
+    private var title: some View {
+        AppFeatureTitle("自动归档", subtitle: subtitle, subtitleLineLimit: 1)
+            .help(subtitle)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 16) {
+                title.frame(width: 240)
+                Spacer(minLength: 0)
+                actions(false).fixedSize()
+            }
+            HStack(spacing: 16) {
+                title.frame(width: 240)
+                Spacer(minLength: 0)
+                actions(true).fixedSize()
+            }
+            VStack(alignment: .leading, spacing: 12) {
+                title
+                ScrollView(.horizontal, showsIndicators: false) {
+                    actions(true).fixedSize()
+                }
+                .frame(height: 30)
+            }
+        }
+        .appFeatureHeaderBackground()
+    }
+}
+
+struct ArchiveWorkbenchView: View {
     @ObservedObject var model: ArchiveViewModel
     @State private var confirmsReorganize = false
     @State private var editsConvention = false
@@ -126,7 +174,7 @@ private struct ArchiveWorkbenchView: View {
         VStack(spacing: 0) {
             header
             GeometryReader { proxy in
-                let wide = proxy.size.width >= 880
+                let wide = ArchiveWorkbenchLayout.isWide(width: proxy.size.width)
                 Group {
                     if wide {
                         HStack(alignment: .top, spacing: 16) {
@@ -134,14 +182,16 @@ private struct ArchiveWorkbenchView: View {
                                 ArchiveStatusStrip(model: model)
                                 ArchiveBrowserPanel(model: model)
                             }
-                            ArchiveSideColumn(model: model).frame(width: 330)
+                            ArchiveSideColumn(model: model).frame(width: ArchiveWorkbenchLayout.sideWidth)
+                                .frame(maxHeight: .infinity)
                         }
                     } else {
                         ScrollView {
                             VStack(spacing: 16) {
                                 ArchiveStatusStrip(model: model)
-                                ArchiveBrowserPanel(model: model).frame(minHeight: 420)
-                                ArchiveSideColumn(model: model).frame(minHeight: 360)
+                                ArchiveBrowserPanel(model: model)
+                                    .frame(height: ArchiveWorkbenchLayout.browserHeight(availableHeight: proxy.size.height))
+                                ArchiveSideColumn(model: model).frame(height: 480)
                             }
                         }
                     }
@@ -149,6 +199,7 @@ private struct ArchiveWorkbenchView: View {
                 .padding(.horizontal, 20)
                 .padding(.bottom, 20)
                 .padding(.top, 8)
+                .frame(width: proxy.size.width, height: proxy.size.height)
             }
         }
         .sheet(isPresented: $editsConvention) { ArchiveConventionSheet(model: model) }
@@ -161,15 +212,9 @@ private struct ArchiveWorkbenchView: View {
     }
 
     private var header: some View {
-        HStack(spacing: AppLayout.featureHeaderSpacing) {
-            AppFeatureTitle("自动归档", subtitle: subtitle)
-            Spacer(minLength: 16)
-            ViewThatFits(in: .horizontal) {
-                actions(compact: false)
-                actions(compact: true)
-            }
+        ArchiveWorkbenchHeader(subtitle: subtitle) { compact in
+            actions(compact: compact)
         }
-        .appFeatureHeaderBackground()
     }
 
     private var subtitle: String {

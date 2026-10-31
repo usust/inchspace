@@ -8,10 +8,6 @@ import Foundation
 struct LaunchpadPersistenceService {
     let fileURL: URL
 
-    var modificationDate: Date? {
-        try? fileURL.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
-    }
-
     init(fileURL: URL? = nil) {
         if let fileURL {
             self.fileURL = fileURL

@@ -44,7 +44,7 @@ final class AppWindowPreferencesTests: XCTestCase {
         XCTAssertEqual(reloaded.shortcut.displayName, "⇧⌘ K")
     }
 
-    func testApplyingSyncedPreferencesKeepsDeviceSpecificSettings() {
+    func testApplyingPortablePreferencesKeepsDeviceSpecificSettings() {
         let (defaults, suiteName) = makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let localShortcut = AppGlobalShortcut(
@@ -56,14 +56,12 @@ final class AppWindowPreferencesTests: XCTestCase {
         preferences.setShowsDockIcon(false)
         preferences.setShowsMenuBarIcon(false)
         preferences.setShortcut(localShortcut)
-        let remoteDate = Date(timeIntervalSince1970: 1_786_300_000)
 
-        preferences.applySyncedPreferences(
-            SyncedAppPreferences(
+        preferences.applyPortablePreferences(
+            PortableAppPreferences(
                 hidesAfterOpen: false,
                 windowPosition: .screenCenter
-            ),
-            modifiedAt: remoteDate
+            )
         )
 
         XCTAssertFalse(preferences.hidesAfterOpen)
@@ -71,7 +69,6 @@ final class AppWindowPreferencesTests: XCTestCase {
         XCTAssertFalse(preferences.showsDockIcon)
         XCTAssertFalse(preferences.showsMenuBarIcon)
         XCTAssertEqual(preferences.shortcut, localShortcut)
-        XCTAssertEqual(preferences.syncedModifiedAt, remoteDate)
 
         let reloaded = AppWindowPreferences(defaults: defaults)
         XCTAssertFalse(reloaded.hidesAfterOpen)
@@ -79,25 +76,19 @@ final class AppWindowPreferencesTests: XCTestCase {
         XCTAssertFalse(reloaded.showsDockIcon)
         XCTAssertFalse(reloaded.showsMenuBarIcon)
         XCTAssertEqual(reloaded.shortcut, localShortcut)
-        XCTAssertEqual(reloaded.syncedModifiedAt, remoteDate)
     }
 
-    func testOnlyPortablePreferencesAdvanceCloudModificationDate() {
+    func testLegacySyncSettingsAreNotUsedOrUpdated() {
         let (defaults, suiteName) = makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: "iCloudDriveSyncEnabled")
+        let oldDate = Date(timeIntervalSince1970: 100)
+        defaults.set(oldDate, forKey: "window.syncedPreferencesModifiedAt")
         let preferences = AppWindowPreferences(defaults: defaults)
-
-        preferences.setShowsDockIcon(false)
-        preferences.setShowsMenuBarIcon(false)
-        XCTAssertNil(preferences.syncedModifiedAt)
-
         preferences.setHidesAfterOpen(false)
-        let firstDate = preferences.syncedModifiedAt
-        XCTAssertNotNil(firstDate)
-
         preferences.setPosition(.screenCenter)
-        XCTAssertNotNil(preferences.syncedModifiedAt)
-        XCTAssertGreaterThanOrEqual(preferences.syncedModifiedAt!, firstDate!)
+        XCTAssertEqual(defaults.object(forKey: "window.syncedPreferencesModifiedAt") as? Date, oldDate)
+        XCTAssertEqual(preferences.portablePreferences.windowPosition, .screenCenter)
     }
 
     func testMainWindowBridgeReportsEachWindowOnlyWhenAttachmentChanges() {

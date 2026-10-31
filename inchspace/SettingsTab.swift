@@ -4,7 +4,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     case general
     case terminal
     case ai
-    case sync
+    case backup
     case updates
 
     var id: String { rawValue }
@@ -14,7 +14,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: "slider.horizontal.3"
         case .terminal: "terminal"
         case .ai: "sparkles"
-        case .sync: "icloud"
+        case .backup: "externaldrive"
         case .updates: "arrow.down.circle"
         }
     }
@@ -24,7 +24,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: "通用"
         case .terminal: "终端"
         case .ai: "AI"
-        case .sync: "同步"
+        case .backup: "数据与备份"
         case .updates: "更新"
         }
     }

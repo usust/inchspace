@@ -84,19 +84,28 @@ struct ArchiveBrowserPanel: View {
     }
 
     private var scopeBar: some View {
-        HStack(spacing: 12) {
-            Picker("筛选", selection: $model.filter) {
-                ForEach(ArchiveEntryFilter.allCases) { item in Text(item.title).tag(item) }
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                filterPicker
+                Spacer(minLength: 8)
+                ArchiveBadgeLegend().fixedSize()
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .controlSize(.small)
-            .fixedSize()
-            Spacer(minLength: 8)
-            ArchiveBadgeLegend()
+            ScrollView(.horizontal, showsIndicators: false) {
+                filterPicker
+            }
         }
         .padding(.horizontal, 12).frame(height: 34)
         .background(.ultraThinMaterial.opacity(0.4))
+    }
+
+    private var filterPicker: some View {
+        Picker("筛选", selection: $model.filter) {
+            ForEach(ArchiveEntryFilter.allCases) { item in Text(item.title).tag(item) }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .controlSize(.small)
+        .fixedSize()
     }
 
     @ViewBuilder private var content: some View {
@@ -140,7 +149,7 @@ struct ArchiveBrowserPanel: View {
     }
 }
 
-private struct ArchiveBrowserTable: View {
+struct ArchiveBrowserTable: View {
     @ObservedObject var model: ArchiveViewModel
     let items: [ArchiveBrowserItem]
     let showsFolder: Bool
@@ -161,24 +170,24 @@ private struct ArchiveBrowserTable: View {
                 }
                 .help(item.path)
             }
-            .width(min: 200, ideal: 340)
+            .width(min: ArchiveWorkbenchLayout.tableColumnMinimums[0], ideal: 340)
             TableColumn("整理状态", value: \.sortStatus) { item in ArchiveStatusCell(item: item) }
-                .width(min: 150, ideal: 260)
+                .width(min: ArchiveWorkbenchLayout.tableColumnMinimums[1], ideal: 260)
             TableColumn("主题", value: \.sortTopic) { item in
                 Text(item.entry?.topic ?? "").foregroundStyle(.secondary).lineLimit(1)
             }
-            .width(min: 50, ideal: 90)
+            .width(min: ArchiveWorkbenchLayout.tableColumnMinimums[2], ideal: 90)
             TableColumn("大小", value: \.sortSize) { item in
                 Text(item.isDirectory ? "--" : ByteCountFormatter.string(fromByteCount: item.size ?? 0, countStyle: .file))
                     .foregroundStyle(.secondary).monospacedDigit()
             }
-            .width(min: 56, ideal: 76)
+            .width(min: ArchiveWorkbenchLayout.tableColumnMinimums[3], ideal: 76)
             TableColumn("种类", value: \.sortKind) { item in Text(item.kind).foregroundStyle(.secondary).lineLimit(1) }
-                .width(min: 60, ideal: 110)
+                .width(min: ArchiveWorkbenchLayout.tableColumnMinimums[4], ideal: 110)
             TableColumn("修改日期", value: \.sortModified) { item in
                 Text(item.modified?.formatted(date: .abbreviated, time: .shortened) ?? "--").foregroundStyle(.secondary).lineLimit(1)
             }
-            .width(min: 100, ideal: 150)
+            .width(min: ArchiveWorkbenchLayout.tableColumnMinimums[5], ideal: 150)
         }
         .tableStyle(.inset(alternatesRowBackgrounds: true))
         .scrollContentBackground(.hidden)
@@ -374,19 +383,17 @@ private struct ArchiveStatusCell: View {
     }
 }
 
-private struct ArchiveBadgeLegend: View {
+struct ArchiveBadgeLegend: View {
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 10) {
-                item("已整理", .green, "checkmark")
-                item("已移动", .purple, "arrow.right")
-                item("已改名", .blue, "pencil")
-                item("未归位", .yellow, "questionmark")
-                item("失败", .red, "exclamationmark")
-                item("处理中", .accentColor, "arrow.trianglehead.2.clockwise")
-            }
-            EmptyView()
+        HStack(spacing: 10) {
+            item("已整理", .green, "checkmark")
+            item("已移动", .purple, "arrow.right")
+            item("已改名", .blue, "pencil")
+            item("未归位", .yellow, "questionmark")
+            item("失败", .red, "exclamationmark")
+            item("处理中", .accentColor, "arrow.trianglehead.2.clockwise")
         }
+        .fixedSize(horizontal: true, vertical: false)
         .font(.caption2).foregroundStyle(.secondary)
     }
 
@@ -394,7 +401,7 @@ private struct ArchiveBadgeLegend: View {
         HStack(spacing: 4) {
             Image(systemName: symbol).font(.system(size: 6, weight: .bold)).foregroundStyle(.white)
                 .frame(width: 11, height: 11).background(color, in: Circle())
-            Text(title)
+            Text(title).lineLimit(1).fixedSize()
         }
     }
 }

@@ -11,7 +11,6 @@ import SwiftUI
 
 struct ContentView: View {
     @ObservedObject private var updateManager: UpdateManager
-    @StateObject private var syncManager: ICloudSyncManager
     @StateObject private var repository: LaunchpadRepository
     @StateObject private var runnerStore: RunnerStore
     @StateObject private var serverManager: ServerManager
@@ -22,14 +21,11 @@ struct ContentView: View {
     @State private var selection: SidebarDestination? = .workspace
     @State private var settingsTab: SettingsTab = .general
     @Environment(\.scenePhase) private var scenePhase
-    @EnvironmentObject private var visibilityController: AppVisibilityController
 
     init(updateManager: UpdateManager) {
         self.updateManager = updateManager
         environmentService = EnvironmentVariableService()
-        let syncManager = ICloudSyncManager()
-        _syncManager = StateObject(wrappedValue: syncManager)
-        _repository = StateObject(wrappedValue: LaunchpadRepository(syncManager: syncManager))
+        _repository = StateObject(wrappedValue: LaunchpadRepository())
         _runnerStore = StateObject(wrappedValue: RunnerStore())
         _serverManager = StateObject(wrappedValue: ServerManager())
         _terminalManager = StateObject(wrappedValue: TerminalManager())
@@ -55,29 +51,10 @@ struct ContentView: View {
             selection = .terminal
         }
         .onAppear { configureTerminalIntegration() }
-        .task {
-            await repository.startCloudSync()
-        }
-        .task {
-            await synchronizePreferences(allowsUpload: true)
-        }
         .task { await runnerStore.bootstrap() }
         .task { _ = environmentService.reloadEnvironment() }
-        .onReceive(visibilityController.preferences.$syncedModifiedAt.dropFirst().compactMap { $0 }) { date in
-            syncManager.schedulePreferencesUpload(
-                visibilityController.preferences.syncedPreferences,
-                modifiedAt: date
-            )
-        }
         .onChange(of: scenePhase) { _, newPhase in
-            if newPhase == .active {
-                Task {
-                    await repository.refreshCloudData()
-                    await synchronizePreferences(allowsUpload: false)
-                }
-            } else {
-                repository.saveImmediately()
-            }
+            if newPhase != .active { repository.saveImmediately() }
         }
     }
 
@@ -112,26 +89,7 @@ struct ContentView: View {
                 description: Text("此工具区域将在后续版本中提供。")
             )
         case .settings:
-            SettingsView(syncManager: syncManager, updateManager: updateManager, terminalManager: terminalManager, selectedCategory: $settingsTab) {
-                Task {
-                    await repository.startCloudSync()
-                    await synchronizePreferences(allowsUpload: true)
-                }
-            }
-        }
-    }
-
-    private func synchronizePreferences(allowsUpload: Bool) async {
-        let preferences = visibilityController.preferences
-        if let snapshot = await syncManager.synchronizePreferences(
-            localPreferences: preferences.syncedPreferences,
-            localModifiedAt: preferences.syncedModifiedAt,
-            allowsUpload: allowsUpload
-        ) {
-            preferences.applySyncedPreferences(
-                snapshot.preferences,
-                modifiedAt: snapshot.modifiedAt
-            )
+            SettingsView(repository: repository, updateManager: updateManager, terminalManager: terminalManager, selectedCategory: $settingsTab)
         }
     }
 

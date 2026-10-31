@@ -1,6 +1,22 @@
 import AppKit
 import SwiftUI
 
+struct RunnerTaskEditorRequest: Identifiable {
+    let id = UUID()
+    let task: RunnerTask?
+
+    @MainActor
+    func save(_ draft: RunnerTask, to store: RunnerStore) {
+        if let task {
+            var updated = draft
+            updated.id = task.id
+            store.update(updated)
+        } else {
+            store.add(draft)
+        }
+    }
+}
+
 struct RunnerTaskEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: RunnerTask
@@ -40,7 +56,7 @@ struct RunnerTaskEditor: View {
                             .textFieldStyle(.roundedBorder)
                             .font(.system(.body, design: .monospaced))
                     }
-                    field("项目位置", hint: "Runner 只会访问你选择的文件夹。") {
+                    field("项目位置", hint: "命令会在此文件夹中执行，也可以直接填写该文件夹内的可执行程序名称。") {
                         HStack {
                             Text(draft.workingDirectoryPath.isEmpty ? "尚未选择" : draft.workingDirectoryPath)
                                 .foregroundStyle(draft.workingDirectoryPath.isEmpty ? .secondary : .primary)
@@ -57,22 +73,10 @@ struct RunnerTaskEditor: View {
 
                     VStack(alignment: .leading, spacing: 10) {
                         Text("启动方式").font(.headline)
-                        ForEach(RunnerLaunchMode.allCases) { mode in
-                            Button {
-                                draft.launchMode = mode
-                            } label: {
-                                HStack(spacing: 12) {
-                                    Image(systemName: draft.launchMode == mode ? "checkmark.circle.fill" : "circle")
-                                        .foregroundStyle(draft.launchMode == mode ? Color.accentColor : Color.secondary)
-                                    Text(mode.title).foregroundStyle(.primary)
-                                    Spacer()
-                                }
-                                .padding(12)
-                                .background(draft.launchMode == mode ? Color.accentColor.opacity(0.09) : Color.clear, in: RoundedRectangle(cornerRadius: 12))
+                        HStack(spacing: 10) {
+                            ForEach(RunnerLaunchMode.allCases) { mode in
+                                launchModeCard(mode)
                             }
-                            .buttonStyle(.plain)
-                            .help(mode.detail)
-                            .accessibilityAddTraits(draft.launchMode == mode ? .isSelected : [])
                         }
                     }
 
@@ -117,6 +121,53 @@ struct RunnerTaskEditor: View {
         }
         .frame(width: 610, height: 680)
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private func launchModeCard(_ mode: RunnerLaunchMode) -> some View {
+        let isSelected = draft.launchMode == mode
+        let symbol: String = switch mode {
+        case .temporary: "play.fill"
+        case .background: "arrow.triangle.2.circlepath"
+        case .login: "power"
+        }
+        return Button {
+            draft.launchMode = mode
+        } label: {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Image(systemName: symbol)
+                        .font(.system(size: 17, weight: .semibold))
+                    Spacer()
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 15))
+                }
+                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                Text(mode.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text(mode.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .frame(height: 32, alignment: .topLeading)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                isSelected ? Color.accentColor.opacity(0.09) : Color(nsColor: .controlBackgroundColor),
+                in: RoundedRectangle(cornerRadius: 12)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(isSelected ? Color.accentColor.opacity(0.7) : Color.primary.opacity(0.1), lineWidth: 1)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .help(mode.detail)
+        .accessibilityLabel(mode.title)
+        .accessibilityValue(mode.detail)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private func field<Content: View>(_ title: String, hint: String, @ViewBuilder content: () -> Content) -> some View {

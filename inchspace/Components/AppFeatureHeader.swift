@@ -25,10 +25,12 @@ struct AppPageBackground: View {
 struct AppFeatureTitle: View {
     let title: String
     let subtitle: String?
+    let subtitleLineLimit: Int?
 
-    init(_ title: String, subtitle: String? = nil) {
+    init(_ title: String, subtitle: String? = nil, subtitleLineLimit: Int? = nil) {
         self.title = title
         self.subtitle = subtitle
+        self.subtitleLineLimit = subtitleLineLimit
     }
 
     var body: some View {
@@ -41,6 +43,7 @@ struct AppFeatureTitle: View {
                 Text(subtitle)
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .lineLimit(subtitleLineLimit)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }

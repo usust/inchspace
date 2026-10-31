@@ -108,7 +108,14 @@ final class RunnerStore: ObservableObject {
             let outputPipe = Pipe()
             let errorPipe = Pipe()
             process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            process.arguments = ["-l", "-c", task.command]
+            // Login profiles may change directory or replace PATH before the command runs.
+            let command = """
+            builtin cd -- "$1" || exit $?
+            shift
+            export PATH="$PATH:$PWD"
+            \(task.command)
+            """
+            process.arguments = ["-l", "-c", command, "inchspace-runner", directoryURL.path]
             process.currentDirectoryURL = directoryURL
             var environment = AppEnvironmentStore.shared.environment()
             environment["PATH"] = environment["PATH"].flatMap { $0.isEmpty ? nil : $0 }
@@ -161,7 +168,8 @@ final class RunnerStore: ObservableObject {
     }
 
     func stop(_ id: UUID) {
-        guard let managed = processes[id] else { return }
+        guard let managed = processes[id], managed.process.isRunning else { return }
+        managed.stopRequested = true
         appendLog(id, "正在停止任务…", isError: false)
         managed.process.terminate()
     }
@@ -172,7 +180,10 @@ final class RunnerStore: ObservableObject {
             return
         }
         managed.restartWhenFinished = true
-        managed.process.terminate()
+        if managed.process.isRunning {
+            managed.stopRequested = true
+            managed.process.terminate()
+        }
     }
 
     func togglePause(_ id: UUID) {
@@ -345,8 +356,9 @@ final class RunnerStore: ObservableObject {
         snapshots[id]?.cpuPercent = 0
         snapshots[id]?.memoryBytes = 0
         snapshots[id]?.lastExitCode = code
-        snapshots[id]?.state = code == 0 ? .stopped : .failed
-        appendLog(id, code == 0 ? "任务已停止。" : "任务异常结束（代码 \(code)）。", isError: code != 0)
+        let failed = code != 0 && !managed.stopRequested
+        snapshots[id]?.state = failed ? .failed : .stopped
+        appendLog(id, failed ? "任务异常结束（代码 \(code)）。" : "任务已停止。", isError: failed)
         if managed.restartWhenFinished {
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(250))
@@ -420,6 +432,7 @@ private final class ManagedRunnerProcess: @unchecked Sendable {
     let securityScopedURL: URL?
     var outputTask: Task<Void, Never>?
     var errorTask: Task<Void, Never>?
+    var stopRequested = false
     var restartWhenFinished = false
 
     init(process: Process, outputPipe: Pipe, errorPipe: Pipe, securityScopedURL: URL?) {

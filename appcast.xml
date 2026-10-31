@@ -3,6 +3,24 @@
     <channel>
         <title>inchspace</title>
         <item>
+            <title>0.0.16</title>
+            <pubDate>Sat, 31 Oct 2026 13:53:56 +0800</pubDate>
+            <link>https://github.com/usust/inchspace</link>
+            <sparkle:version>11</sparkle:version>
+            <sparkle:shortVersionString>0.0.16</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# inchspace 0.0.16
+
+- 新增「数据与备份」设置，支持导出、预览和导入启动台配置及通用窗口偏好，替代旧版 iCloud 自动同步。
+- 导入前自动保存恢复备份，严格校验备份格式；保留匹配的本机授权，并支持重新授权程序和目录入口。
+- 修复运行中心编辑任务时的数据绑定，优化启动方式选择界面。
+- 确保任务在指定目录执行，支持直接运行目录内的可执行程序；主动停止任务不再显示为异常退出。
+- 优化自动归档的响应式布局、表格与筛选栏，改善窄窗口和长路径下的显示。
+- 增加配置备份、导入回滚、设备授权、运行器及归档布局回归测试。
+]]></description>
+            <enclosure url="https://github.com/usust/inchspace/releases/download/v0.0.16/inchspace-0.0.16.dmg" length="11280737" type="application/octet-stream" sparkle:edSignature="qZ4dKsqpGCEFCS2jXt44L+CWmIHqTnoGXCxnJjbXNjbq59mVVik4HyZbVG5w6vzHlIUxLlD03xDWROKsh/OnBg=="/>
+        </item>
+        <item>
             <title>0.0.15</title>
             <pubDate>Tue, 27 Oct 2026 10:33:00 +0800</pubDate>
             <link>https://github.com/usust/inchspace</link>
@@ -25,15 +43,6 @@
             <sparkle:shortVersionString>0.0.14</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
             <enclosure url="https://github.com/usust/inchspace/releases/download/v0.0.14/inchspace-0.0.14.dmg" length="11205924" type="application/octet-stream" sparkle:edSignature="9ujuEued83waSGlIgGBZ3CyeK6qrXlv+NY5nNXVI9xYQRGC4FumKfvMGog4Hh2mzpt6nJz3u+RhKwOcxGdhlCA=="/>
-        </item>
-        <item>
-            <title>0.0.12</title>
-            <pubDate>Wed, 21 Oct 2026 23:28:46 +0800</pubDate>
-            <link>https://github.com/usust/inchspace</link>
-            <sparkle:version>8</sparkle:version>
-            <sparkle:shortVersionString>0.0.12</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/usust/inchspace/releases/download/v0.0.12/inchspace-0.0.12.dmg" length="9095129" type="application/octet-stream" sparkle:edSignature="jg3FSnUshKfc780UikJYAv/eI992zr82MQooJtOOj1X/pnhSszUVWFkwxV7KJFL8ALDpWQDC3Tt7qefWZbmHBA=="/>
         </item>
     </channel>
 </rss>

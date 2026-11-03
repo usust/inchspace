@@ -3,6 +3,25 @@
     <channel>
         <title>inchspace</title>
         <item>
+            <title>0.0.17</title>
+            <pubDate>Tue, 03 Nov 2026 15:21:00 +0800</pubDate>
+            <link>https://github.com/usust/inchspace</link>
+            <sparkle:version>12</sparkle:version>
+            <sparkle:shortVersionString>0.0.17</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# inchspace 0.0.17
+
+- 新增 Python 环境管理：登记、发现和创建 venv 环境，查看已安装模块，复制激活命令，并在内置终端或系统终端中激活环境、运行脚本。
+- Python 终端支持 zsh / bash，分屏保留环境且不会重复执行脚本；移除环境记录不会删除环境文件。
+- 新增启动台行列布局设置并随配置备份保存，优化网格缩放、滚动、拖拽和分页。
+- 改进单实例和单窗口行为，打开启动台项目后按设置最小化窗口。
+- 新增终端深色主题、双行提示符与推荐外观设置，优化终端标签栏和分屏显示。
+- 改善侧栏、应用语言、Python 环境、运行中心及自动归档页面在窗口缩放时的布局。
+- 补充 Python 环境与终端集成、启动台布局、窗口行为及响应式界面的回归测试。
+]]></description>
+            <enclosure url="https://github.com/usust/inchspace/releases/download/v0.0.17/inchspace-0.0.17.dmg" length="11630472" type="application/octet-stream" sparkle:edSignature="k5NgysYo38vmNXrPMKTukz5ZzgBGUkLUlfJusz6omI2vdh2kcAVMOt1nEAJviBGJoAKvIn9E5Up3pT0t87LoDw=="/>
+        </item>
+        <item>
             <title>0.0.16</title>
             <pubDate>Sat, 31 Oct 2026 13:53:56 +0800</pubDate>
             <link>https://github.com/usust/inchspace</link>
@@ -34,15 +53,6 @@
 - 增加多个快速任务同时结束的回归测试，验证两路日志均被保留。
 ]]></description>
             <enclosure url="https://github.com/usust/inchspace/releases/download/v0.0.15/inchspace-0.0.15.dmg" length="11208378" type="application/octet-stream" sparkle:edSignature="ZFHV1B7iLm6aMjl8cJMEn12nm9AEegiztvwN5GcMtJPYelAUwrEMqu8pd+BHIebvapC2UnfnrzAee1S2xMN9AQ=="/>
-        </item>
-        <item>
-            <title>0.0.14</title>
-            <pubDate>Sat, 24 Oct 2026 14:08:57 +0800</pubDate>
-            <link>https://github.com/usust/inchspace</link>
-            <sparkle:version>9</sparkle:version>
-            <sparkle:shortVersionString>0.0.14</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/usust/inchspace/releases/download/v0.0.14/inchspace-0.0.14.dmg" length="11205924" type="application/octet-stream" sparkle:edSignature="9ujuEued83waSGlIgGBZ3CyeK6qrXlv+NY5nNXVI9xYQRGC4FumKfvMGog4Hh2mzpt6nJz3u+RhKwOcxGdhlCA=="/>
         </item>
     </channel>
 </rss>

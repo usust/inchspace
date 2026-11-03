@@ -49,8 +49,13 @@ final class PythonEnvironmentServiceTests: XCTestCase {
             let data = output.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
             XCTAssertEqual(process.terminationStatus, 0)
-            XCTAssertEqual(String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines),
-                           currentDirectory.resolvingSymlinksInPath().path)
+            let reportedPath = String(decoding: data, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            // /var and /private/var can name the same directory on macOS.
+            let reported = try FileManager.default.attributesOfItem(atPath: reportedPath)
+            let expected = try FileManager.default.attributesOfItem(atPath: currentDirectory.path)
+            XCTAssertEqual(reported[.systemNumber] as? NSNumber, expected[.systemNumber] as? NSNumber)
+            XCTAssertEqual(reported[.systemFileNumber] as? NSNumber, expected[.systemFileNumber] as? NSNumber)
         }
     }
 

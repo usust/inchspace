@@ -287,7 +287,7 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
             view.appearance = nil
             dark = systemIsDark
                 ?? (NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua)
-        case .macOSDark, .dracula, .oneDark, .solarizedDark, .catppuccinMocha, .custom:
+        case .inchspace, .macOSDark, .dracula, .oneDark, .solarizedDark, .catppuccinMocha, .custom:
             dark = true
             view.appearance = NSAppearance(named: .darkAqua)
         }
@@ -317,6 +317,7 @@ final class TerminalSession: NSObject, ObservableObject, Identifiable, LocalProc
         view.lineSpacing = preferences.lineHeight
         view.changeScrollback(preferences.scrollbackLines)
         view.nativeBackgroundColor = appearance.background
+        (view.superview as? TerminalContainerView)?.updateSurfaceColor(appearance.background)
         view.nativeForegroundColor = appearance.foreground
         view.layer?.backgroundColor = appearance.background.cgColor
         view.caretColor = appearance.cursor
@@ -715,7 +716,7 @@ private final class SearchFieldCursorOwner: NSResponder {
     }
 }
 
-private struct TerminalAppearanceSignature: Equatable {
+struct TerminalAppearanceSignature: Equatable {
     let fontSize: Double
     let fontFamily: String
     let lineHeight: Double
@@ -728,7 +729,7 @@ private struct TerminalAppearanceSignature: Equatable {
     let automaticallyCopiesSelection: Bool
 }
 
-private struct TerminalAppearance {
+struct TerminalAppearance {
     let background: NSColor
     let foreground: NSColor
     let cursor: NSColor
@@ -740,6 +741,8 @@ private struct TerminalAppearance {
     init(theme: TerminalThemePreference, resolvedDark: Bool, preferences: TerminalPreferences) {
         let colors: (String, String, String, String, [SwiftTerm.Color])
         switch theme {
+        case .inchspace:
+            colors = ("#20252B", "#E5E9EF", "#62C4B3", "#3B5268", Self.inchspaceANSI)
         case .dracula:
             colors = ("#282A36", "#F8F8F2", "#BD93F9", "#44475A", Self.draculaANSI)
         case .oneDark:
@@ -778,6 +781,13 @@ private struct TerminalAppearance {
 
     /// Base ANSI colors are theme-specific for legibility. ANSI 256 and true color
     /// sequences continue to be interpreted by SwiftTerm without prompt parsing.
+    private static let inchspaceANSI: [SwiftTerm.Color] = [
+        color(48, 55, 64), color(240, 128, 128), color(98, 196, 179), color(225, 192, 123),
+        color(121, 184, 255), color(197, 165, 232), color(113, 205, 221), color(229, 233, 239),
+        color(148, 160, 175), color(255, 158, 158), color(137, 223, 199), color(245, 215, 153),
+        color(159, 205, 255), color(220, 191, 250), color(158, 229, 239), color(255, 255, 255),
+    ]
+
     private static let lightANSI: [SwiftTerm.Color] = [
         color(46, 49, 56), color(188, 52, 50), color(36, 122, 62), color(138, 93, 0),
         color(36, 90, 199), color(132, 61, 154), color(8, 122, 134), color(91, 95, 103),

@@ -22,6 +22,20 @@ final class ConfigurationBackupTests: XCTestCase {
         return try JSONSerialization.data(withJSONObject: object)
     }
 
+    func testLayoutRoundTripAndLegacyDefaults() throws {
+        let layout = LaunchpadLayoutPreferences(rows: 3, columns: 7)
+        let original = backup(LaunchpadLibrary(layout: layout))
+        XCTAssertEqual(try ConfigurationBackup.decode(original.encoded()).library.layout, layout)
+        let legacy = try mutate(original) { object in
+            var payload = object["payload"] as! [String: Any]
+            var library = payload["library"] as! [String: Any]
+            library.removeValue(forKey: "layout")
+            payload["library"] = library
+            object["payload"] = payload
+        }
+        XCTAssertEqual(try ConfigurationBackup.decode(legacy).library.layout, LaunchpadLayoutPreferences())
+    }
+
     func testFormatAndBusinessDataRoundTrip() throws {
         let original = backup()
         let data = try original.encoded()

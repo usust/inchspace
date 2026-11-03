@@ -108,6 +108,8 @@ struct TerminalSettingsSection: View {
 
     private var appearanceSettings: some View {
         Section("外观") {
+            TerminalThemeChooser(preferences: preferences)
+
             LabeledContent {
                 Picker("Prompt", selection: $preferences.promptStyle) {
                     ForEach(TerminalPromptStyle.allCases) { style in Text(style.title).tag(style) }
@@ -117,7 +119,7 @@ struct TerminalSettingsSection: View {
             } label: {
                 SettingsPreferenceLabel(
                     title: "Shell Prompt",
-                    description: "新会话生效，默认隐藏完整主机名",
+                    description: "新会话生效；双行样式分开显示身份、路径与输入位置",
                     systemImage: "chevron.right"
                 )
             }
@@ -189,20 +191,6 @@ struct TerminalSettingsSection: View {
                 )
             }
 
-            LabeledContent {
-                Picker("主题", selection: $preferences.theme) {
-                    ForEach(TerminalThemePreference.allCases) { theme in Text(theme.title).tag(theme) }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-            } label: {
-                SettingsPreferenceLabel(
-                    title: "外观",
-                    description: "默认跟随系统，也可选择固定的亮色、深色或自定义主题",
-                    systemImage: "circle.lefthalf.filled"
-                )
-            }
-
             if preferences.theme == .custom {
                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
                     colorField("背景", text: $preferences.customBackgroundColor)
@@ -254,6 +242,42 @@ struct TerminalSettingsSection: View {
                 .font(.system(.body, design: .monospaced))
                 .textFieldStyle(.roundedBorder)
                 .frame(minWidth: 120, idealWidth: 150, maxWidth: 240)
+        }
+    }
+}
+
+struct TerminalThemeChooser: View {
+    @ObservedObject var preferences: TerminalPreferences
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Picker("终端主题", selection: $preferences.theme) {
+                ForEach(TerminalThemePreference.allCases) { theme in
+                    Text(theme.title).tag(theme)
+                }
+            }
+            let appearance = TerminalAppearance(
+                theme: preferences.theme, resolvedDark: colorScheme == .dark, preferences: preferences
+            )
+            VStack(alignment: .leading, spacing: 6) {
+                Text("user@mac  ~/Projects")
+                    .foregroundStyle(Color(nsColor: appearance.foreground))
+                Text("❯ python --version")
+                    .foregroundStyle(Color(nsColor: appearance.cursor))
+                Text("Python 3.12.8")
+                    .foregroundStyle(Color(nsColor: appearance.foreground))
+            }
+            .font(.system(size: 13, design: .monospaced))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(Color(nsColor: appearance.background), in: RoundedRectangle(cornerRadius: 8))
+            .accessibilityLabel("主题配色示例，不是真实终端输出")
+            Button("应用推荐外观") { preferences.applyRecommendedAppearance() }
+            Text("配色立即生效；推荐外观同时启用双行提示符和 1.20 倍行高。提示符在新会话中生效。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

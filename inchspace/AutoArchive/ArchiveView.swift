@@ -258,16 +258,22 @@ struct ArchiveWorkbenchView: View {
                     .help("选择用于整理的 AI 模型")
             }
             .buttonStyle(.bordered)
-            .labelStyle(compact ? AnyLabelStyle(.iconOnly) : AnyLabelStyle(.titleAndIcon))
+            .labelStyle(ArchiveActionLabelStyle(compact: compact))
         }
         .controlSize(.regular)
     }
 }
 
-private struct AnyLabelStyle: LabelStyle {
-    private let make: (Configuration) -> AnyView
-    init<S: LabelStyle>(_ style: S) { make = { AnyView(style.makeBody(configuration: $0)) } }
-    func makeBody(configuration: Configuration) -> some View { make(configuration) }
+private struct ArchiveActionLabelStyle: LabelStyle {
+    let compact: Bool
+
+    @ViewBuilder func makeBody(configuration: Configuration) -> some View {
+        if compact {
+            Label(configuration).labelStyle(.iconOnly)
+        } else {
+            Label(configuration).labelStyle(.titleAndIcon)
+        }
+    }
 }
 
 // MARK: - Status strip

@@ -125,6 +125,17 @@ final class LaunchpadRepository: ObservableObject {
         scheduleSave()
     }
 
+    func setLayout(rows: Int, columns: Int) {
+        let layout = LaunchpadLayoutPreferences(rows: rows, columns: columns)
+        guard layout != library.layout else { return }
+        cancelInteractiveMutation()
+        library.layout = layout
+        for category in LaunchItemCategory.allCases {
+            normalize(category: category, capacity: layout.capacity, persist: false)
+        }
+        scheduleSave()
+    }
+
     func normalize(category: LaunchItemCategory, capacity: Int, persist: Bool = true) {
         let original = library
         applyRootOrder(rootEntries(in: category).map(\.id), category: category, capacity: capacity)

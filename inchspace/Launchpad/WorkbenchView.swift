@@ -20,29 +20,23 @@ struct WorkbenchView: View {
     @State private var unavailableItem: LaunchItem?
     @State private var unavailableMessage = ""
     @State private var applicationOpenPanel: NSOpenPanel?
-    @State private var currentCapacity = 24
+    private var currentCapacity: Int { repository.library.layout.capacity }
     @EnvironmentObject private var visibilityController: AppVisibilityController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
-                HStack(spacing: AppLayout.featureHeaderSpacing) {
-                    AppFeatureTitle("启动台", subtitle: "应用、目录与网站，随手可达")
-                    Spacer(minLength: 16)
-                    LaunchpadHeaderView(category: $category)
-                    Button("添加", systemImage: "plus", action: addCurrentCategory)
-                        .buttonStyle(.borderedProminent)
-                        .help("添加\(category.title)")
-                }
-                .appFeatureHeaderBackground()
+                LaunchpadHeaderView(category: $category)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 12)
+                    .padding(.bottom, 12)
 
                 LaunchpadGridView(
                     category: category,
                     repository: repository,
                     dragCoordinator: dragCoordinator,
                     openedGroupID: $openedGroupID,
-                    capacity: $currentCapacity,
                     onOpenItem: open,
                     onRenameItem: { item in
                         renameRequest = RenameRequest(kind: .item(item.id), name: item.name)
@@ -54,8 +48,6 @@ struct WorkbenchView: View {
                     onEditWebsite: { websiteRequest = WebsiteEditRequest(item: $0) },
                     onError: present
                 )
-                .clipShape(RoundedRectangle(cornerRadius: AppLayout.cardRadius, style: .continuous))
-                .appSurface()
                 .padding(.horizontal, AppLayout.pagePadding)
                 .padding(.top, 8)
                 .padding(.bottom, AppLayout.pagePadding)
@@ -83,6 +75,10 @@ struct WorkbenchView: View {
         }
         .onChange(of: category) { _, _ in
             repository.cancelInteractiveMutation()
+            dragCoordinator.reset()
+            openedGroupID = nil
+        }
+        .onChange(of: repository.library.layout) { _, _ in
             dragCoordinator.reset()
             openedGroupID = nil
         }
@@ -232,7 +228,7 @@ struct WorkbenchView: View {
             do {
                 let destination = try await LaunchpadOpenService.open(item)
                 repository.markOpened(itemID: item.id)
-                visibilityController.hideAfterSuccessfulOpen(destination)
+                visibilityController.minimizeAfterSuccessfulOpen(destination)
             } catch {
                 repository.markUnavailable(itemID: item.id)
                 if item.category == .website {
@@ -281,14 +277,30 @@ struct LaunchpadHeaderView: View {
     @Binding var category: LaunchItemCategory
 
     var body: some View {
-        Picker("分类", selection: $category) {
-            ForEach(LaunchItemCategory.allCases) { category in
-                Text(category.title).tag(category)
+        HStack(spacing: 4) {
+            ForEach(LaunchItemCategory.allCases) { item in
+                Button {
+                    category = item
+                } label: {
+                    Text(item.title)
+                        .font(.body.weight(category == item ? .semibold : .regular))
+                        .frame(width: 68, height: 32)
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(category == item ? Color.accentColor : .primary)
+                .background {
+                    if category == item {
+                        Capsule().fill(Color.accentColor.opacity(0.15))
+                    }
+                }
+                .accessibilityAddTraits(category == item ? .isSelected : [])
             }
         }
-        .labelsHidden()
-        .pickerStyle(.segmented)
-        .frame(width: 230)
+        .padding(5)
+        .glassEffect(.regular, in: .capsule)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("分类")
     }
 }
 

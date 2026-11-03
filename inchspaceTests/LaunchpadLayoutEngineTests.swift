@@ -3,12 +3,144 @@
 //  inchspaceTests
 //
 
+import AppKit
 import CoreGraphics
+import SwiftUI
 import XCTest
 @testable import inchspace
 
 @MainActor
 final class LaunchpadLayoutEngineTests: XCTestCase {
+    func testWorkbenchMinimumWidthDoesNotDisplaceSidebar() {
+        let fileURL = temporaryLibraryURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        let repository = LaunchpadRepository(
+            persistence: LaunchpadPersistenceService(fileURL: fileURL)
+        )
+        let host = NSHostingView(rootView: WorkbenchView(repository: repository)
+            .environmentObject(AppVisibilityController.shared))
+
+        // A 900-point window must also accommodate the widest sidebar and its divider.
+        let availableDetailWidth: CGFloat = 900 - 280 - 1
+        XCTAssertLessThanOrEqual(host.fittingSize.width, availableDetailWidth)
+        for width in [availableDetailWidth, 676, 1000] {
+            host.frame = CGRect(x: 0, y: 0, width: width, height: 560)
+            host.layoutSubtreeIfNeeded()
+            XCTAssertEqual(host.frame.width, width, accuracy: 0.001)
+        }
+    }
+
+    func testWindowWidthOnlyChangesGridSpacing() {
+        let narrow = LaunchpadGridMetrics(size: CGSize(width: LaunchpadGridMetrics.minimumWidth, height: 600))
+        let wide = LaunchpadGridMetrics(size: CGSize(width: 1200, height: 600))
+
+        XCTAssertEqual(narrow.columns, 6)
+        XCTAssertEqual(wide.columns, narrow.columns)
+        XCTAssertEqual(wide.cellWidth, narrow.cellWidth)
+        XCTAssertEqual(wide.capacity, narrow.capacity)
+        XCTAssertEqual(narrow.horizontalSpacing, LaunchpadGridMetrics.minimumSpacing)
+        XCTAssertGreaterThan(wide.horizontalSpacing, narrow.horizontalSpacing)
+        for metrics in [narrow, wide] {
+            let contentWidth = CGFloat(metrics.columns) * metrics.cellWidth
+                + CGFloat(metrics.columns - 1) * metrics.horizontalSpacing
+                + metrics.horizontalPadding * 2
+            XCTAssertEqual(contentWidth, metrics.size.width, accuracy: 0.001)
+        }
+    }
+
+    func testNarrowGridPreservesConfiguredRowsColumnsAndCapacity() {
+        for rows in LaunchpadLayoutPreferences.rowRange {
+            for columns in LaunchpadLayoutPreferences.columnRange {
+                let layout = LaunchpadLayoutPreferences(rows: rows, columns: columns)
+                for width: CGFloat in [400, 571, 628, 740, 788, 1000] {
+                    for height: CGFloat in [300, 600, 900] {
+                        let metrics = LaunchpadGridMetrics(size: CGSize(width: width, height: height), layout: layout)
+                        XCTAssertEqual(metrics.columns, columns)
+                        XCTAssertEqual(metrics.rows, rows)
+                        XCTAssertEqual(metrics.capacity, rows * columns)
+                        XCTAssertGreaterThanOrEqual(metrics.horizontalSpacing, 0)
+                        let contentWidth = CGFloat(columns) * metrics.cellWidth
+                            + CGFloat(columns - 1) * metrics.horizontalSpacing
+                            + metrics.horizontalPadding * 2
+                        XCTAssertGreaterThan(metrics.cellScale, 0)
+                        XCTAssertLessThanOrEqual(metrics.cellScale, 1)
+                        XCTAssertEqual(metrics.cellWidth, 112 * metrics.cellScale)
+                        XCTAssertEqual(metrics.cellHeight, metrics.cellWidth)
+                        XCTAssertEqual(contentWidth, width, accuracy: 0.001)
+                        let contentHeight = CGFloat(rows) * metrics.cellHeight
+                            + CGFloat(rows - 1) * metrics.verticalSpacing
+                        XCTAssertGreaterThanOrEqual(contentHeight, CGFloat(rows) * metrics.cellHeight)
+                        XCTAssertEqual(metrics.contentWidth, contentWidth)
+                        XCTAssertEqual(metrics.contentHeight, contentHeight)
+                        XCTAssertEqual(metrics.requiresScrolling,
+                                       contentWidth > width + 0.001 || contentHeight > height - 58 + 0.001)
+                    }
+                }
+            }
+        }
+    }
+
+    func testIconScaleDependsOnColumnsButNotWindowHeight() {
+        let fewerColumns = LaunchpadGridMetrics(
+            size: CGSize(width: 620, height: 600),
+            layout: LaunchpadLayoutPreferences(columns: 4)
+        )
+        let moreColumns = LaunchpadGridMetrics(
+            size: CGSize(width: 620, height: 600),
+            layout: LaunchpadLayoutPreferences(columns: 8)
+        )
+        let shorterWindow = LaunchpadGridMetrics(
+            size: CGSize(width: 620, height: 300),
+            layout: LaunchpadLayoutPreferences(columns: 8)
+        )
+
+        XCTAssertEqual(fewerColumns.cellScale, 1)
+        XCTAssertLessThan(moreColumns.cellScale, fewerColumns.cellScale)
+        XCTAssertEqual(shorterWindow.cellScale, moreColumns.cellScale)
+        XCTAssertEqual(shorterWindow.contentWidth, 620, accuracy: 0.001)
+        XCTAssertTrue(shorterWindow.requiresScrolling)
+    }
+
+    func testLayoutDefaultsValidationAndPersistence() throws {
+        let legacy = try JSONDecoder().decode(LaunchpadLibrary.self, from: Data("{}".utf8))
+        XCTAssertEqual(legacy.layout, LaunchpadLayoutPreferences(rows: 4, columns: 6))
+        let invalid = try JSONDecoder().decode(LaunchpadLayoutPreferences.self,
+            from: Data("{\"rows\":-1,\"columns\":999}".utf8))
+        XCTAssertEqual(invalid.rows, 2)
+        XCTAssertEqual(invalid.columns, 8)
+        let fileURL = temporaryLibraryURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        let persistence = LaunchpadPersistenceService(fileURL: fileURL)
+        let repository = LaunchpadRepository(persistence: persistence)
+        repository.setLayout(rows: 3, columns: 5)
+        repository.saveImmediately()
+        XCTAssertEqual(try persistence.load()?.layout, LaunchpadLayoutPreferences(rows: 3, columns: 5))
+    }
+
+    func testChangingLayoutRepaginatesWithoutLosingOrder() throws {
+        let (repository, _) = try makeRepository(itemCount: 40)
+        let original = repository.rootEntries(in: .application).map(\.id)
+        repository.setSelectedPage(1, for: .application, capacity: 24)
+        repository.setLayout(rows: 2, columns: 3)
+        XCTAssertEqual(repository.rootEntries(in: .application).map(\.id), original)
+        XCTAssertEqual(repository.pages(in: .application, capacity: 6).count, 7)
+        repository.setLayout(rows: 6, columns: 8)
+        XCTAssertEqual(repository.rootEntries(in: .application).map(\.id), original)
+        XCTAssertEqual(repository.selectedPage(for: .application, capacity: 48), 0)
+    }
+
+    func testGridAlwaysReservesConfiguredColumnsForLeadingAlignment() {
+        for columns in LaunchpadLayoutPreferences.columnRange {
+            for width: CGFloat in [400, 1000] {
+                let metrics = LaunchpadGridMetrics(
+                    size: CGSize(width: width, height: 600),
+                    layout: LaunchpadLayoutPreferences(columns: columns)
+                )
+                XCTAssertEqual(metrics.gridItems.count, columns)
+            }
+        }
+    }
+
     func testDragCenterKeepsInitialGrabOffsetAfterDragBegins() async throws {
         let coordinator = LaunchpadDragCoordinator(longPressDuration: 0.01)
         let entryID = UUID()

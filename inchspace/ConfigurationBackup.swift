@@ -218,15 +218,18 @@ struct ConfigurationBackup: Codable {
         let version: Int
         let items: [ItemDTO]
         let groups: [GroupDTO]
+        let layout: LaunchpadLayoutPreferences?
 
         init(_ library: LaunchpadLibrary) {
+            layout = library.layout
             version = library.version
             items = library.items.map { ItemDTO($0) }
             groups = library.groups.map { GroupDTO($0) }
         }
 
         var model: LaunchpadLibrary {
-            LaunchpadLibrary(version: version, items: items.map(\.model), groups: groups.map(\.model))
+            LaunchpadLibrary(version: version, items: items.map(\.model), groups: groups.map(\.model),
+                             layout: layout ?? LaunchpadLayoutPreferences())
         }
     }
 

@@ -15,7 +15,7 @@ struct inchspaceApp: App {
     @StateObject private var visibilityController = AppVisibilityController.shared
 
     var body: some Scene {
-        WindowGroup(id: "main") {
+        Window("寸空间", id: "main") {
             ContentView(updateManager: updateManager)
                 .frame(minWidth: 900, minHeight: 560)
                 .environmentObject(visibilityController)

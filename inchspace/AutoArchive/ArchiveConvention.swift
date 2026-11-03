@@ -210,7 +210,7 @@ nonisolated struct ArchiveNamingRule: Codable, Equatable, Sendable {
 
 // MARK: - Preference
 
-extension ArchiveConvention {
+nonisolated extension ArchiveConvention {
     /// The default preference text shown to the user; parsing it yields the standard convention.
     static let defaultPreference = "按类别整理，类别名用中文；文件名中多个词用 - 连接。"
 

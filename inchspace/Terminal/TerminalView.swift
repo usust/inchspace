@@ -5,6 +5,7 @@ struct TerminalView: View {
     @ObservedObject var manager: TerminalManager
     @ObservedObject var serverManager: ServerManager
     @ObservedObject private var copilot: TerminalAICopilotController
+    @State private var showsAppearance = false
     @State private var pendingClose: TerminalSession?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -83,10 +84,25 @@ struct TerminalView: View {
 
     private var header: some View {
         HStack(alignment: .center, spacing: AppLayout.featureHeaderSpacing) {
-            AppFeatureTitle("终端", subtitle: "本地与远程会话，专注每一步操作")
+            Label("终端", systemImage: "terminal")
+                .font(.headline)
             Spacer(minLength: 24)
 
             HStack(spacing: 8) {
+                Button {
+                    showsAppearance.toggle()
+                } label: {
+                    toolbarSymbol("paintpalette")
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .help("终端外观")
+                .accessibilityLabel("终端外观")
+                .popover(isPresented: $showsAppearance) {
+                    TerminalThemeChooser(preferences: manager.preferences)
+                        .padding(18)
+                        .frame(width: 340)
+                }
                 Button {
                     copilot.isSidebarVisible.toggle()
                 } label: {
@@ -131,7 +147,8 @@ struct TerminalView: View {
             }
             .controlSize(.regular)
         }
-        .appFeatureHeaderBackground(opacity: 0.62)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
         .background(TerminalWindowDragRegion())
     }
 

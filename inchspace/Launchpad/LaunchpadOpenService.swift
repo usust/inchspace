@@ -8,17 +8,17 @@ import Foundation
 
 @MainActor
 enum LaunchpadOpenService {
-    /// 打开成功后保留目标应用身份，供窗口协调器隐藏自身后恢复前台焦点。
+    /// 打开成功后的目标应用身份。
     struct OpenedDestination {
         let runningApplication: NSRunningApplication?
         let bundleIdentifier: String?
 
-        func activate() {
-            let application = runningApplication
-                ?? bundleIdentifier.flatMap {
-                    NSRunningApplication.runningApplications(withBundleIdentifier: $0).first
-                }
-            application?.activate(options: [.activateAllWindows])
+        var isCurrentApplication: Bool {
+            if let runningApplication {
+                return runningApplication.processIdentifier == ProcessInfo.processInfo.processIdentifier
+            }
+            guard let bundleIdentifier else { return false }
+            return bundleIdentifier == Bundle.main.bundleIdentifier
         }
     }
 

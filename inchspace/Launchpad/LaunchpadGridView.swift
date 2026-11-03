@@ -13,7 +13,6 @@ struct LaunchpadGridView: View {
     @ObservedObject var repository: LaunchpadRepository
     @ObservedObject var dragCoordinator: LaunchpadDragCoordinator
     @Binding var openedGroupID: UUID?
-    @Binding var capacity: Int
     let onOpenItem: (LaunchItem) -> Void
     let onRenameItem: (LaunchItem) -> Void
     let onRenameGroup: (LaunchGroup) -> Void
@@ -30,14 +29,18 @@ struct LaunchpadGridView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let metrics = LaunchpadGridMetrics(size: proxy.size)
+            let metrics = LaunchpadGridMetrics(size: proxy.size, layout: repository.library.layout)
             gridContent(metrics: metrics)
                 .task(id: metrics.capacity) {
-                    capacity = metrics.capacity
                     repository.normalize(category: category, capacity: metrics.capacity)
                 }
         }
         .coordinateSpace(name: "launchpad-grid")
+        .onChange(of: repository.library.layout) { _, _ in
+            dragSlots = nil
+            cellFrames = LaunchpadFrameStore()
+            showsInsertionGap = false
+        }
         .onDisappear {
             if dragCoordinator.state.phase != .idle {
                 repository.cancelInteractiveMutation()
@@ -56,7 +59,7 @@ struct LaunchpadGridView: View {
         ) {
             Button("解散程序组，保留里面的程序") {
                 guard let group = groupPendingDissolution else { return }
-                performGroupDissolution(group.id, capacity: capacity)
+                performGroupDissolution(group.id, capacity: repository.library.layout.capacity)
                 groupPendingDissolution = nil
             }
             Button("取消", role: .cancel) {
@@ -92,24 +95,27 @@ struct LaunchpadGridView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    LazyVGrid(
-                        columns: metrics.gridItems,
-                        alignment: .center,
-                        spacing: metrics.verticalSpacing
-                    ) {
-                        ForEach(displayedEntries) { entry in
-                            entryCell(
-                                entry,
-                                availableGroups: availableGroups,
-                                metrics: metrics,
-                                pageIndex: currentPage
-                            )
-                                .frame(height: metrics.cellHeight)
+                    ScrollView(.vertical) {
+                        LazyVGrid(
+                            columns: metrics.gridItems,
+                            alignment: .leading,
+                            spacing: metrics.verticalSpacing
+                        ) {
+                            ForEach(displayedEntries) { entry in
+                                entryCell(
+                                    entry,
+                                    availableGroups: availableGroups,
+                                    metrics: metrics,
+                                    pageIndex: currentPage
+                                )
+                                    .frame(height: metrics.cellHeight)
+                            }
                         }
+                        .padding(.horizontal, metrics.horizontalPadding)
+                        .frame(width: metrics.contentWidth, alignment: .leading)
+                        .padding(.top, 10)
                     }
-                    .padding(.horizontal, metrics.horizontalPadding)
-                    .padding(.top, 10)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .id("\(category.rawValue)-\(currentPage)")
                     .transition(.opacity.combined(with: .offset(x: 20)))
                     .animation(
@@ -124,7 +130,8 @@ struct LaunchpadGridView: View {
                         entry: draggedEntry,
                         groupItems: groupItems(for: draggedEntry),
                         isGroupCandidate: dragCoordinator.state.isFolderMergeReady,
-                        dragPosition: dragCoordinator.dragPosition
+                        dragPosition: dragCoordinator.dragPosition,
+                        scale: metrics.cellScale
                     )
                     .allowsHitTesting(false)
                     .zIndex(20)
@@ -132,7 +139,8 @@ struct LaunchpadGridView: View {
             }
             .background {
                 ScrollWheelMonitor { direction in
-                    guard !dragCoordinator.state.isDragging,
+                    guard !metrics.requiresScrolling,
+                          !dragCoordinator.state.isDragging,
                           dragCoordinator.state.phase != .pressing,
                           Date().timeIntervalSince(lastScrollTurn) > 0.45 else { return }
                     lastScrollTurn = Date()
@@ -205,6 +213,9 @@ struct LaunchpadGridView: View {
                 requestGroupDissolution(entry.id)
             }
         )
+        .frame(width: 112, height: 112)
+        .scaleEffect(metrics.cellScale, anchor: .topLeading)
+        .frame(width: metrics.cellWidth, height: metrics.cellHeight, alignment: .topLeading)
         .onGeometryChange(for: CGRect.self) { proxy in
             proxy.frame(in: .named("launchpad-grid"))
         } action: { frame in
@@ -254,7 +265,7 @@ struct LaunchpadGridView: View {
                 dragCenterOffset = CGSize(
                     width: sourceFrame.midX - value.startLocation.x,
                     height: sourceFrame.minY
-                        + LaunchpadInteractionConstants.rootIconSize / 2
+                        + LaunchpadInteractionConstants.rootIconSize * metrics.cellScale / 2
                         - value.startLocation.y
                 )
             } else {
@@ -281,9 +292,13 @@ struct LaunchpadGridView: View {
               dragCoordinator.state.draggedEntryID != entry.id,
               case .item = entry,
               let cellFrame = cellFrames[entry.id] else { return false }
-        return LaunchpadRemoveControlLayout.hitFrame(in: cellFrame, iconSize: 68)
+        let scale = cellFrame.width / 112
+        let unscaledFrame = CGRect(x: 0, y: 0, width: 112, height: 112)
+        let localPoint = CGPoint(x: (value.startLocation.x - cellFrame.minX) / scale,
+                                 y: (value.startLocation.y - cellFrame.minY) / scale)
+        return LaunchpadRemoveControlLayout.hitFrame(in: unscaledFrame, iconSize: 68)
             .insetBy(dx: -2, dy: -2)
-            .contains(value.startLocation)
+            .contains(localPoint)
     }
 
     private func handlePointerEnded(entry: LaunchEntry, metrics: LaunchpadGridMetrics) {
@@ -581,29 +596,49 @@ struct LaunchpadGridView: View {
     }
 }
 
-private struct LaunchpadGridMetrics {
+struct LaunchpadGridMetrics {
+    static let columnCount = 6
+    static let minimumSpacing: CGFloat = 12
+    static let minimumWidth: CGFloat = 28 * 2 + 112 * CGFloat(columnCount)
+        + minimumSpacing * CGFloat(columnCount - 1)
     let size: CGSize
     let columns: Int
     let rows: Int
     let capacity: Int
     let cellWidth: CGFloat
-    let cellHeight: CGFloat = 112
+    let cellHeight: CGFloat
+    let cellScale: CGFloat
     let horizontalSpacing: CGFloat
-    let verticalSpacing: CGFloat = 18
-    let horizontalPadding: CGFloat = 28
+    let verticalSpacing: CGFloat
+    let horizontalPadding: CGFloat
     let edgePagingWidth: CGFloat = 32
 
-    init(size: CGSize) {
+    init(size: CGSize, layout: LaunchpadLayoutPreferences = LaunchpadLayoutPreferences()) {
         self.size = size
-        let usableWidth = max(size.width - 56, 220)
-        let targetCellWidth: CGFloat = 112
-        let targetSpacing: CGFloat = 22
-        columns = max(2, Int((usableWidth + targetSpacing) / (targetCellWidth + targetSpacing)))
-        horizontalSpacing = max(12, min(32, (usableWidth - CGFloat(columns) * targetCellWidth) / CGFloat(max(columns - 1, 1))))
-        cellWidth = targetCellWidth
-        let gridHeight = max(size.height - 58, cellHeight)
-        rows = max(1, Int((gridHeight + verticalSpacing) / (cellHeight + verticalSpacing)))
-        capacity = max(columns * rows, 1)
+        columns = layout.columns
+        rows = layout.rows
+        capacity = layout.capacity
+        let width = max(size.width, 1)
+        let height = max(size.height - 58, 1)
+        horizontalPadding = min(28, max(0, (width - 112 * CGFloat(columns)) / 2))
+        let usableWidth = width - horizontalPadding * 2
+        cellScale = min(1, usableWidth / (112 * CGFloat(columns)))
+        cellWidth = 112 * cellScale
+        cellHeight = 112 * cellScale
+        horizontalSpacing = max(0, (usableWidth - CGFloat(columns) * cellWidth) / CGFloat(columns - 1))
+        verticalSpacing = min(18, max(0, (height - CGFloat(rows) * cellHeight) / CGFloat(rows - 1)))
+    }
+
+    var contentWidth: CGFloat {
+        CGFloat(columns) * cellWidth + CGFloat(columns - 1) * horizontalSpacing + horizontalPadding * 2
+    }
+
+    var contentHeight: CGFloat {
+        CGFloat(rows) * cellHeight + CGFloat(rows - 1) * verticalSpacing
+    }
+
+    var requiresScrolling: Bool {
+        contentWidth > size.width + 0.001 || contentHeight > size.height - 58 + 0.001
     }
 
     var gridItems: [GridItem] {

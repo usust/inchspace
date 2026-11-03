@@ -194,6 +194,29 @@ struct LaunchPage {
     let entries: [LaunchEntry]
 }
 
+struct LaunchpadLayoutPreferences: Codable, Equatable {
+    static let rowRange = 2...6
+    static let columnRange = 3...8
+    let rows: Int
+    let columns: Int
+    var capacity: Int { rows * columns }
+
+    init(rows: Int = 4, columns: Int = 6) {
+        self.rows = min(max(rows, Self.rowRange.lowerBound), Self.rowRange.upperBound)
+        self.columns = min(max(columns, Self.columnRange.lowerBound), Self.columnRange.upperBound)
+    }
+
+    private enum CodingKeys: String, CodingKey { case rows, columns }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            rows: try values.decodeIfPresent(Int.self, forKey: .rows) ?? 4,
+            columns: try values.decodeIfPresent(Int.self, forKey: .columns) ?? 6
+        )
+    }
+}
+
 struct LaunchpadLibrary: Codable, Equatable {
     static let currentVersion = 2
 
@@ -201,24 +224,28 @@ struct LaunchpadLibrary: Codable, Equatable {
     var items: [LaunchItem] = []
     var groups: [LaunchGroup] = []
     var selectedPages: [LaunchItemCategory: Int] = [:]
+    var layout = LaunchpadLayoutPreferences()
 
     private enum CodingKeys: String, CodingKey {
         case version
         case items
         case groups
         case selectedPages
+        case layout
     }
 
     init(
         version: Int = Self.currentVersion,
         items: [LaunchItem] = [],
         groups: [LaunchGroup] = [],
-        selectedPages: [LaunchItemCategory: Int] = [:]
+        selectedPages: [LaunchItemCategory: Int] = [:],
+        layout: LaunchpadLayoutPreferences = LaunchpadLayoutPreferences()
     ) {
         self.version = version
         self.items = items
         self.groups = groups
         self.selectedPages = selectedPages
+        self.layout = layout
     }
 
     init(from decoder: Decoder) throws {
@@ -226,6 +253,7 @@ struct LaunchpadLibrary: Codable, Equatable {
         version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 0
         items = try container.decodeIfPresent([LaunchItem].self, forKey: .items) ?? []
         groups = try container.decodeIfPresent([LaunchGroup].self, forKey: .groups) ?? []
+        layout = try container.decodeIfPresent(LaunchpadLayoutPreferences.self, forKey: .layout) ?? LaunchpadLayoutPreferences()
         selectedPages = try container.decodeIfPresent(
             [LaunchItemCategory: Int].self,
             forKey: .selectedPages

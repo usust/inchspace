@@ -277,7 +277,7 @@ private struct ConfigurationImportPreview: View {
                         LabeledContent(category.title, value: "\(document.library.items.filter { $0.category == category }.count) 个")
                     }
                     LabeledContent("分组", value: "\(document.library.groups.count) 个")
-                    LabeledContent("打开后隐藏窗口", value: document.preferences.hidesAfterOpen ? "开启" : "关闭")
+                    LabeledContent("打开后最小化窗口", value: document.preferences.hidesAfterOpen ? "开启" : "关闭")
                     LabeledContent("窗口位置", value: document.preferences.windowPosition.title)
                     if !unverifiedItems.isEmpty {
                         Divider()

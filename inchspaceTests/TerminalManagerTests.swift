@@ -6,7 +6,7 @@ final class TerminalManagerTests: XCTestCase {
     func testLocalSessionsKeepIndependentIdentityAndSelection() {
         let (preferences, suiteName) = makePreferences()
         defer { UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName) }
-        let manager = TerminalManager(preferences: preferences)
+        let manager = TerminalTestSupport.makeManager(preferences: preferences, testCase: self)
 
         let first = manager.openLocalSession(directory: "/tmp")
         let second = manager.openLocalSession(directory: "/")
@@ -23,7 +23,7 @@ final class TerminalManagerTests: XCTestCase {
 
     func testSplitCreatesPaneInsideTheSelectedSessionWithoutAddingTab() {
         let (preferences, _) = makePreferences()
-        let manager = TerminalManager(preferences: preferences)
+        let manager = TerminalTestSupport.makeManager(preferences: preferences, testCase: self)
         let primary = manager.openLocalSession(directory: "/tmp")
 
         manager.split(.horizontal)
@@ -45,7 +45,7 @@ final class TerminalManagerTests: XCTestCase {
 
     func testNestedSplitsAndPaneCloseKeepTheRemainingLayoutValid() {
         let (preferences, _) = makePreferences()
-        let manager = TerminalManager(preferences: preferences)
+        let manager = TerminalTestSupport.makeManager(preferences: preferences, testCase: self)
         let session = manager.openLocalSession(directory: "/tmp")
         let firstID = session.activePaneID
 
@@ -85,7 +85,7 @@ final class TerminalManagerTests: XCTestCase {
 
     func testLocalPTYProcessesUnicodeANSIAndResize() async throws {
         let (preferences, _) = makePreferences()
-        let manager = TerminalManager(preferences: preferences)
+        let manager = TerminalTestSupport.makeManager(preferences: preferences, testCase: self)
         let session = manager.openLocalSession(directory: "/tmp")
         session.startIfNeeded()
         defer { session.terminate() }
@@ -141,7 +141,7 @@ final class TerminalManagerTests: XCTestCase {
         let (preferences, suiteName) = makePreferences()
         defer { UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName) }
         preferences.cleanShellStartup = true
-        let manager = TerminalManager(preferences: preferences)
+        let manager = TerminalTestSupport.makeManager(preferences: preferences, testCase: self)
         let session = manager.openLocalSession(directory: "/tmp")
         session.startIfNeeded()
         defer { session.terminate() }
@@ -175,7 +175,7 @@ final class TerminalManagerTests: XCTestCase {
 
         let (preferences, suiteName) = makePreferences()
         defer { UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName) }
-        let manager = TerminalManager(preferences: preferences)
+        let manager = TerminalTestSupport.makeManager(preferences: preferences, testCase: self)
         let session = manager.openLocalSession(directory: "/tmp")
         session.startIfNeeded()
         defer { session.terminate() }
@@ -196,7 +196,7 @@ final class TerminalManagerTests: XCTestCase {
 
     func testTerminalContainerInsetsDefineTheRealGridArea() {
         let (preferences, _) = makePreferences()
-        let manager = TerminalManager(preferences: preferences)
+        let manager = TerminalTestSupport.makeManager(preferences: preferences, testCase: self)
         let session = manager.openLocalSession(directory: "/tmp")
         let container = TerminalContainerView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
 
@@ -216,9 +216,55 @@ final class TerminalManagerTests: XCTestCase {
         XCTAssertLessThan(session.terminalView.getTerminal().rows, initialRows)
     }
 
+    func testTerminalContainerSurfaceTracksLiveThemeChanges() {
+        let (preferences, _) = makePreferences()
+        let manager = TerminalTestSupport.makeManager(preferences: preferences, testCase: self)
+        let session = manager.openLocalSession(directory: "/tmp")
+        let container = TerminalContainerView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
+        container.attach(session.terminalView)
+
+        for theme in [TerminalThemePreference.light, .oneDark, .inchspace, .light] {
+            preferences.theme = theme
+            session.applyAppearance()
+            XCTAssertEqual(container.surfaceColor, session.terminalView.nativeBackgroundColor)
+            XCTAssertEqual(container.layer?.backgroundColor, session.terminalView.nativeBackgroundColor.cgColor)
+            XCTAssertTrue(container.isOpaque)
+            XCTAssertTrue(session.terminalView.superview === container)
+        }
+
+        let replacement = TerminalContainerView(frame: container.frame)
+        replacement.attach(session.terminalView)
+        XCTAssertEqual(replacement.surfaceColor, session.terminalView.nativeBackgroundColor)
+    }
+
+    func testTerminalBackgroundDrawingDoesNotCoverAdjacentContent() throws {
+        let container = TerminalContainerView(frame: NSRect(x: 0, y: 0, width: 80, height: 60))
+        XCTAssertTrue(container.clipsToBounds)
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 100, pixelsHigh: 100,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+            isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ))
+        let context = try XCTUnwrap(NSGraphicsContext(bitmapImageRep: bitmap))
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSGraphicsContext.current = context
+        NSColor.red.setFill()
+        NSRect(x: 0, y: 0, width: 100, height: 100).fill()
+        container.updateSurfaceColor(.blue)
+        container.draw(NSRect(x: 0, y: 0, width: 100, height: 100))
+        context.flushGraphics()
+
+        let outside = try XCTUnwrap(bitmap.colorAt(x: 90, y: 90)?.usingColorSpace(.deviceRGB))
+        XCTAssertEqual(outside.redComponent, 1, accuracy: 0.01)
+        XCTAssertEqual(outside.blueComponent, 0, accuracy: 0.01)
+        let inside = try XCTUnwrap(bitmap.colorAt(x: 10, y: 50)?.usingColorSpace(.deviceRGB))
+        XCTAssertEqual(inside.blueComponent, 1, accuracy: 0.01)
+    }
+
     func testUnchangedTerminalLayoutDoesNotTriggerRepeatedGridResize() {
         let (preferences, _) = makePreferences()
-        let manager = TerminalManager(preferences: preferences)
+        let manager = TerminalTestSupport.makeManager(preferences: preferences, testCase: self)
         let session = manager.openLocalSession(directory: "/tmp")
         let container = TerminalContainerView(frame: NSRect(x: 0, y: 0, width: 800, height: 500))
 
@@ -242,7 +288,7 @@ final class TerminalManagerTests: XCTestCase {
 
     func testMovingPrimaryTerminalToSplitContainerSurvivesOldContainerTeardown() {
         let (preferences, _) = makePreferences()
-        let manager = TerminalManager(preferences: preferences)
+        let manager = TerminalTestSupport.makeManager(preferences: preferences, testCase: self)
         let primary = manager.openLocalSession(directory: "/tmp")
         let originalContainer = TerminalContainerView(
             frame: NSRect(x: 0, y: 0, width: 900, height: 500)
@@ -274,7 +320,7 @@ final class TerminalManagerTests: XCTestCase {
 
     func testRepeatedSplitLayoutChangesCannotLetStaleContainersStealTerminals() {
         let (preferences, _) = makePreferences()
-        let manager = TerminalManager(preferences: preferences)
+        let manager = TerminalTestSupport.makeManager(preferences: preferences, testCase: self)
         let primary = manager.openLocalSession(directory: "/tmp")
         manager.split(.vertical)
         let secondary = primary.activePane
@@ -323,7 +369,7 @@ final class TerminalManagerTests: XCTestCase {
 
     func testLightDarkAndSystemThemesResolveDistinctSurfaces() {
         let (preferences, _) = makePreferences()
-        let manager = TerminalManager(preferences: preferences)
+        let manager = TerminalTestSupport.makeManager(preferences: preferences, testCase: self)
         let session = manager.openLocalSession(directory: "/tmp")
 
         preferences.theme = .light
@@ -346,14 +392,16 @@ final class TerminalManagerTests: XCTestCase {
         XCTAssertEqual(systemDarkBackground, darkBackground)
     }
 
-    func testTerminalThemeDefaultsToFollowingSystemAppearance() {
+    func testTerminalDefaultsToIndependentDarkWorkspace() {
         let (preferences, suiteName) = makePreferences()
         defer { UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName) }
 
-        XCTAssertEqual(preferences.theme, .system)
+        XCTAssertEqual(preferences.theme, .inchspace)
+        XCTAssertEqual(preferences.promptStyle, .contextual)
+        XCTAssertEqual(preferences.lineHeight, 1.20)
     }
 
-    func testLegacyMacOSDarkDefaultMigratesToFollowingSystemAppearance() {
+    func testSavedMacOSDarkThemeIsNotOverwritten() {
         let suiteName = "inchspace-tests-terminal-migration-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.set(TerminalThemePreference.macOSDark.rawValue, forKey: "terminal.preferences.theme")
@@ -361,8 +409,8 @@ final class TerminalManagerTests: XCTestCase {
 
         let preferences = TerminalPreferences(defaults: defaults)
 
-        XCTAssertEqual(preferences.theme, .system)
-        XCTAssertEqual(defaults.string(forKey: "terminal.preferences.theme"), TerminalThemePreference.system.rawValue)
+        XCTAssertEqual(preferences.theme, .macOSDark)
+        XCTAssertEqual(defaults.string(forKey: "terminal.preferences.theme"), TerminalThemePreference.macOSDark.rawValue)
     }
 
     func testMigrationPreservesAnExplicitNamedTerminalTheme() {
@@ -376,10 +424,57 @@ final class TerminalManagerTests: XCTestCase {
         XCTAssertEqual(preferences.theme, .dracula)
     }
 
+    func testSavedAppearancePreferencesRemainUnchanged() {
+        let suiteName = "inchspace-tests-saved-appearance-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set("system", forKey: "terminal.preferences.theme")
+        defaults.set("compactPath", forKey: "terminal.preferences.promptStyle")
+        defaults.set(1.12, forKey: "terminal.preferences.lineHeight")
+        defaults.set(16.0, forKey: "terminal.preferences.fontSize")
+        let preferences = TerminalPreferences(defaults: defaults)
+        XCTAssertEqual(preferences.theme, .system)
+        XCTAssertEqual(preferences.promptStyle, .compactPath)
+        XCTAssertEqual(preferences.lineHeight, 1.12)
+        XCTAssertEqual(preferences.fontSize, 16)
+    }
+
+    func testRecommendedAppearancePreservesFontAndCustomPrompt() {
+        let (preferences, _) = makePreferences()
+        preferences.fontSize = 17
+        preferences.customPrompt = "my prompt "
+        preferences.applyRecommendedAppearance()
+        XCTAssertEqual(preferences.theme, .inchspace)
+        XCTAssertEqual(preferences.promptStyle, .contextual)
+        XCTAssertEqual(preferences.fontSize, 17)
+        XCTAssertEqual(preferences.customPrompt, "my prompt ")
+        let appearance = TerminalAppearance(theme: .inchspace, resolvedDark: false, preferences: preferences)
+        XCTAssertEqual(appearance.ansiPalette.count, 16)
+        let dark = TerminalAppearance(theme: .inchspace, resolvedDark: true, preferences: preferences)
+        XCTAssertEqual(appearance.background, dark.background)
+    }
+
+    func testContextualPromptUsesShellSpecificEscapes() {
+        let (preferences, _) = makePreferences()
+        preferences.promptStyle = .contextual
+        let zsh = TerminalManager.prompt(for: "zsh", preferences: preferences)
+        XCTAssertTrue(zsh.contains("%~"))
+        XCTAssertTrue(zsh.contains("\n"))
+        XCTAssertTrue(zsh.contains("%(?."))
+        let bash = TerminalManager.prompt(for: "bash", preferences: preferences)
+        XCTAssertTrue(bash.contains("\\w"))
+        XCTAssertTrue(bash.contains("$?"))
+        XCTAssertFalse(bash.contains("%F"))
+        XCTAssertEqual(TerminalManager.prompt(for: "fish", preferences: preferences), "$ ")
+        preferences.promptStyle = .custom
+        preferences.customPrompt = "unchanged> "
+        XCTAssertEqual(TerminalManager.prompt(for: "zsh", preferences: preferences), "unchanged> ")
+    }
+
     func testAICommandRoutesBySessionIDInsteadOfSelectedTab() async throws {
         let (preferences, suiteName) = makePreferences()
         defer { UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName) }
-        let manager = TerminalManager(preferences: preferences)
+        let manager = TerminalTestSupport.makeManager(preferences: preferences, testCase: self)
         let target = manager.openLocalSession(directory: "/tmp")
         let selected = manager.openLocalSession(directory: "/tmp")
         target.startIfNeeded()

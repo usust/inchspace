@@ -24,8 +24,8 @@ struct SettingsView: View {
                     set: visibilityController.setHidesAfterOpen
                 )) {
                     SettingsPreferenceLabel(
-                        title: "打开项目后自动隐藏窗口",
-                        description: "启动应用、目录或网站后自动隐藏本程序窗口",
+                        title: "打开项目后自动最小化窗口",
+                        description: "启动应用、目录或网站后使用系统动画最小化，由你决定何时恢复窗口",
                         systemImage: "rectangle.portrait.and.arrow.forward"
                     )
                 }
@@ -70,6 +70,24 @@ struct SettingsView: View {
                         systemImage: "macwindow.on.rectangle"
                     )
                 }
+            }
+
+            Section("启动台布局") {
+                Picker("每页行数", selection: Binding(
+                    get: { repository.library.layout.rows },
+                    set: { repository.setLayout(rows: $0, columns: repository.library.layout.columns) }
+                )) {
+                    ForEach(LaunchpadLayoutPreferences.rowRange, id: \.self) { Text("\($0) 行").tag($0) }
+                }
+                Picker("每行列数", selection: Binding(
+                    get: { repository.library.layout.columns },
+                    set: { repository.setLayout(rows: repository.library.layout.rows, columns: $0) }
+                )) {
+                    ForEach(LaunchpadLayoutPreferences.columnRange, id: \.self) { Text("\($0) 列").tag($0) }
+                }
+                Text("每页最多 \(repository.library.layout.capacity) 个入口。调整窗口大小只改变间距，不改变行列数。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("全局快捷键") {

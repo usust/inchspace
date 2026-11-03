@@ -6,7 +6,7 @@ struct RunnerDashboardView: View {
     let editTask: (RunnerTask) -> Void
     let showLogs: (UUID) -> Void
 
-    private let columns = [GridItem(.adaptive(minimum: 300, maximum: 430), spacing: 16)]
+    private let columns = [GridItem(.adaptive(minimum: 260, maximum: 320), spacing: 12, alignment: .top)]
 
     var body: some View {
         ScrollView {
@@ -165,6 +165,7 @@ struct RunnerDashboardView: View {
 private struct RunnerTaskCard: View {
     @Environment(\.openURL) private var openURL
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var showsDetails = false
     let task: RunnerTask
     let snapshot: RunnerTaskSnapshot
     let start: () -> Void
@@ -177,7 +178,7 @@ private struct RunnerTaskCard: View {
     let delete: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 17) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 13).fill(statusColor.opacity(0.13))
@@ -187,7 +188,7 @@ private struct RunnerTaskCard: View {
                         Image(systemName: snapshot.state == .running ? "waveform.path.ecg" : "play.fill")
                             .foregroundStyle(statusColor)
                     }
-                }.frame(width: 45, height: 45)
+                }.frame(width: 36, height: 36)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(task.name).font(.headline).lineLimit(1)
                     HStack(spacing: 6) {
@@ -206,19 +207,51 @@ private struct RunnerTaskCard: View {
                 .menuStyle(.borderlessButton)
             }
 
-            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 9) {
-                GridRow {
-                    info("PID", snapshot.pid.map(String.init) ?? "—")
-                    info("运行时间", RunnerFormat.duration(snapshot.uptime))
-                    info("启动时间", snapshot.startedAt?.formatted(date: .omitted, time: .shortened) ?? "—")
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Text(runtimeSummary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .help(runtimeSummary)
+                    Spacer(minLength: 0)
+                    Button {
+                        withAnimation(reduceMotion ? nil : AppMotion.transition) {
+                            showsDetails.toggle()
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(showsDetails ? "收起" : "详情")
+                            Image(systemName: showsDetails ? "chevron.up" : "chevron.down")
+                        }
+                        .font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                    .fixedSize()
+                    .accessibilityLabel(showsDetails ? "收起运行详情" : "展开运行详情")
                 }
-                GridRow {
-                    info("CPU", "\(snapshot.cpuPercent.formatted(.number.precision(.fractionLength(1))))%")
-                    info("内存", RunnerFormat.bytes(snapshot.memoryBytes))
-                    info("最近退出码", snapshot.lastExitCode.map(String.init) ?? "—")
+
+                if showsDetails {
+                    Divider()
+                    Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 9) {
+                        GridRow {
+                            info("PID", snapshot.pid.map(String.init) ?? "—")
+                            info("运行时间", RunnerFormat.duration(snapshot.uptime))
+                        }
+                        GridRow {
+                            info("CPU", "\(snapshot.cpuPercent.formatted(.number.precision(.fractionLength(1))))%")
+                            info("内存", RunnerFormat.bytes(snapshot.memoryBytes))
+                        }
+                        GridRow {
+                            info("启动时间", snapshot.startedAt?.formatted(date: .omitted, time: .shortened) ?? "—")
+                            info("最近退出码", snapshot.lastExitCode.map(String.init) ?? "—")
+                        }
+                    }
                 }
             }
-            .padding(12)
+            .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
 
@@ -238,9 +271,20 @@ private struct RunnerTaskCard: View {
             }
             .controlSize(.small)
         }
-        .padding(19)
+        .padding(14)
         .appSurface()
         .animation(reduceMotion ? nil : AppMotion.transition, value: snapshot.state)
+    }
+
+    private var runtimeSummary: String {
+        switch snapshot.state {
+        case .running, .paused:
+            "CPU \(snapshot.cpuPercent.formatted(.number.precision(.fractionLength(1))))% · \(RunnerFormat.bytes(snapshot.memoryBytes))"
+        case .starting:
+            "正在启动…"
+        case .stopped, .failed:
+            snapshot.lastExitCode.map { "退出码 \($0)" } ?? "暂无运行数据"
+        }
     }
 
     @ViewBuilder

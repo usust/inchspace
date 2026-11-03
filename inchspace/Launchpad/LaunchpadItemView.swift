@@ -417,6 +417,7 @@ struct LaunchpadPositionedFloatingPreview: View {
     let groupItems: [LaunchItem]
     let isGroupCandidate: Bool
     @ObservedObject var dragPosition: LaunchpadDragPosition
+    var scale: CGFloat = 1
 
     var body: some View {
         if let location = dragPosition.location {
@@ -425,6 +426,7 @@ struct LaunchpadPositionedFloatingPreview: View {
                 groupItems: groupItems,
                 isGroupCandidate: isGroupCandidate
             )
+            .scaleEffect(scale)
             .position(location)
         }
     }

@@ -5,32 +5,77 @@ struct AppLanguageView: View {
     @StateObject private var model = AppLanguageViewModel()
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
+        AppLanguageWorkbenchView(model: model)
+            .task { if model.applications.isEmpty { await model.refresh() } }
+            .onChange(of: model.selection) { _, _ in model.loadPreference() }
+            .alert("应用语言", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
+                Button("好", role: .cancel) { model.error = nil }
+            } message: { Text(model.error ?? "") }
+    }
+}
 
-            HSplitView {
-                applicationList.frame(minWidth: 240, idealWidth: 290, maxWidth: 360)
-                ScrollView {
-                    if let app = model.selectedApp {
-                        detail(app)
-                            .padding(AppLayout.pagePadding)
-                            .frame(maxWidth: AppLayout.contentMaxWidth, alignment: .leading)
-                            .frame(maxWidth: .infinity, alignment: .top)
+enum AppLanguageLayout {
+    static let listMinimumWidth: CGFloat = 240
+    static let listMaximumWidth: CGFloat = 360
+    static let detailMinimumWidth: CGFloat = 400
+    static let wideMinimumWidth = listMaximumWidth + detailMinimumWidth + 1
+
+    static func isWide(width: CGFloat) -> Bool {
+        width >= wideMinimumWidth
+    }
+
+    static func listHeight(availableHeight: CGFloat) -> CGFloat {
+        min(280, max(0, availableHeight) * 0.42)
+    }
+}
+
+struct AppLanguageWorkbenchView: View {
+    @ObservedObject var model: AppLanguageViewModel
+
+    var body: some View {
+        GeometryReader { page in
+            VStack(spacing: 0) {
+                header
+                GeometryReader { content in
+                    if AppLanguageLayout.isWide(width: content.size.width) {
+                        HSplitView {
+                            applicationList
+                                .frame(minWidth: AppLanguageLayout.listMinimumWidth, idealWidth: 290,
+                                       maxWidth: AppLanguageLayout.listMaximumWidth)
+                            applicationDetail
+                                .frame(minWidth: AppLanguageLayout.detailMinimumWidth)
+                        }
+                        .frame(width: content.size.width, height: content.size.height)
                     } else {
-                        ContentUnavailableView("选择一个应用", systemImage: "character.bubble")
-                            .frame(maxWidth: .infinity, minHeight: 360)
+                        VStack(spacing: 0) {
+                            applicationList
+                                .frame(height: AppLanguageLayout.listHeight(availableHeight: content.size.height))
+                            Divider()
+                            applicationDetail
+                        }
+                        .frame(width: content.size.width, height: content.size.height)
                     }
                 }
-                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(nsColor: .controlBackgroundColor))
             }
+            .frame(width: page.size.width, height: page.size.height)
         }
         .background(Color(nsColor: .windowBackgroundColor))
-        .task { if model.applications.isEmpty { await model.refresh() } }
-        .onChange(of: model.selection) { _, _ in model.loadPreference() }
-        .alert("应用语言", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
-            Button("好", role: .cancel) { model.error = nil }
-        } message: { Text(model.error ?? "") }
+    }
+
+    private var applicationDetail: some View {
+        ScrollView {
+            if let app = model.selectedApp {
+                detail(app)
+                    .padding(AppLayout.pagePadding)
+                    .frame(maxWidth: AppLayout.contentMaxWidth, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .top)
+            } else {
+                ContentUnavailableView("选择一个应用", systemImage: "character.bubble")
+                    .frame(maxWidth: .infinity, minHeight: 360)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .controlBackgroundColor))
     }
 
     private var header: some View {

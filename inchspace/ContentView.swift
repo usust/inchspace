@@ -16,6 +16,7 @@ struct ContentView: View {
     @StateObject private var serverManager: ServerManager
     @StateObject private var terminalManager: TerminalManager
     @StateObject private var remoteFileModel: RemoteFileViewModel
+    @StateObject private var pythonEnvironmentStore = PythonEnvironmentStore()
     @StateObject private var archiveModel = ArchiveViewModel.shared
     private let environmentService: EnvironmentVariableService
     @State private var selection: SidebarDestination? = .workspace
@@ -33,13 +34,10 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
-            AppSidebar(selection: $selection)
-        } detail: {
+        AppNavigationShell(selection: $selection) {
             detailView
                 .background(AppPageBackground())
         }
-        .navigationSplitViewStyle(.balanced)
         .onReceive(NotificationCenter.default.publisher(for: .inchspaceOpenSettings)) { notification in
             if let rawValue = notification.userInfo?["tab"] as? String,
                let requestedTab = SettingsTab(rawValue: rawValue) {
@@ -72,6 +70,8 @@ struct ContentView: View {
             ArchiveView(model: archiveModel, aiSettings: terminalManager.aiSettings)
         case .runner:
             RunnerView(store: runnerStore)
+        case .pythonEnvironments:
+            PythonEnvironmentView(store: pythonEnvironmentStore, terminalManager: terminalManager)
         case .servers:
             ServerManagerView(manager: serverManager)
         case .remoteFiles:

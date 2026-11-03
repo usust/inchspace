@@ -12,9 +12,9 @@ final class TerminalManager: ObservableObject {
     let aiCopilot: TerminalAICopilotController
     private var sessionObservers: [UUID: AnyCancellable] = [:]
 
-    init(preferences: TerminalPreferences? = nil) {
+    init(preferences: TerminalPreferences? = nil, aiSettings: TerminalAISettings? = nil) {
         self.preferences = preferences ?? TerminalPreferences()
-        let aiSettings = TerminalAISettings()
+        let aiSettings = aiSettings ?? TerminalAISettings()
         self.aiSettings = aiSettings
         self.aiCopilot = TerminalAICopilotController(settings: aiSettings)
         aiCopilot.contextBuilder = { [weak self] sessionID, selection in
@@ -41,6 +41,14 @@ final class TerminalManager: ObservableObject {
     @discardableResult
     func openLocalSession(directory: String? = nil) -> TerminalSession {
         makeLocalSession(directory: directory, selects: true)
+    }
+
+    @discardableResult
+    func openPythonSession(_ environment: PythonEnvironment, scriptCommand: String? = nil) throws -> TerminalSession {
+        try PythonEnvironmentService.validate(environment)
+        _ = try PythonEnvironmentService.activationCommand(for: environment, shell: preferences.resolvedShell)
+        return makeLocalSession(directory: environment.workingDirectory, selects: true,
+                                pythonEnvironment: environment, scriptCommand: scriptCommand)
     }
 
     @discardableResult
@@ -128,13 +136,17 @@ final class TerminalManager: ObservableObject {
         return sessions.first { $0.id == id }
     }
 
-    private func makeLocalSession(directory: String?, selects: Bool) -> TerminalSession {
+    private func makeLocalSession(
+        directory: String?, selects: Bool,
+        pythonEnvironment: PythonEnvironment? = nil, scriptCommand: String? = nil
+    ) -> TerminalSession {
         let shell = preferences.resolvedShell
         let shellName = URL(fileURLWithPath: shell).lastPathComponent
         let resolvedDirectory = directory ?? preferences.workingDirectory
         let sessionPreferences = preferences
+        var initialPanePrepared = false
         let session = TerminalSession(
-            title: "本机 — \(shellName)",
+            title: pythonEnvironment.map { "Python — \($0.name)" } ?? "本机 — \(shellName)",
             kind: .local(shell: shell),
             preferences: preferences
         ) { inheritedDirectory in
@@ -156,6 +168,20 @@ final class TerminalManager: ObservableObject {
             environment["PS1"] = prompt
             environment["PROMPT"] = prompt
             environment["HISTFILE"] = sessionPreferences.cleanShellStartup ? "/dev/null" : environment["HISTFILE"]
+            if var pythonEnvironment {
+                pythonEnvironment.workingDirectory = inheritedDirectory ?? resolvedDirectory
+                let bootstrap = try PythonTerminalBootstrap.prepare(
+                    environment: pythonEnvironment, shell: shell, processEnvironment: environment,
+                    scriptCommand: initialPanePrepared ? nil : scriptCommand
+                )
+                initialPanePrepared = true
+                return TerminalProcessConfiguration(
+                    executable: shell, arguments: bootstrap.arguments,
+                    environment: bootstrap.environment.map { "\($0.key)=\($0.value)" }.sorted(),
+                    execName: shellName, currentDirectory: pythonEnvironment.workingDirectory,
+                    resource: TerminalConnectionResource(temporaryURL: bootstrap.directory)
+                )
+            }
             return TerminalProcessConfiguration(
                 executable: shell,
                 arguments: Self.shellArguments(for: shellName, cleanStartup: sessionPreferences.cleanShellStartup),
@@ -181,11 +207,16 @@ final class TerminalManager: ObservableObject {
         }
     }
 
-    private static func prompt(for shellName: String, preferences: TerminalPreferences) -> String {
+    static func prompt(for shellName: String, preferences: TerminalPreferences) -> String {
+        guard shellName == "zsh" || shellName == "bash" else { return "$ " }
         let isZsh = shellName == "zsh"
         let accentStart = isZsh ? "%F{blue}" : "\\[\\e[34m\\]"
         let accentEnd = isZsh ? "%f" : "\\[\\e[0m\\]"
         switch preferences.promptStyle {
+        case .contextual:
+            return isZsh
+                ? "%F{magenta}%n@%m%f  %F{blue}%~%f\n%(?.%F{green}.%F{red})❯%f "
+                : "\\[\\e[35m\\]\\u@\\h\\[\\e[0m\\]  \\[\\e[34m\\]\\w\\[\\e[0m\\]\\n\\[\\e[$(if [ $? -eq 0 ]; then printf 32; else printf 31; fi)m\\]❯\\[\\e[0m\\] "
         case .chevron:
             return "\(accentStart)❯\(accentEnd) "
         case .custom:

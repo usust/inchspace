@@ -63,6 +63,14 @@ final class TerminalContainerView: NSView {
     private weak var terminal: LocalProcessTerminalView?
     private var mouseMonitor: Any?
     private(set) var appliedTerminalFrameUpdates = 0
+    private(set) var surfaceColor: NSColor = .windowBackgroundColor
+
+    override var isOpaque: Bool { surfaceColor.alphaComponent == 1 }
+
+    override func draw(_ dirtyRect: NSRect) {
+        surfaceColor.setFill()
+        dirtyRect.intersection(bounds).fill()
+    }
 
     override var mouseDownCanMoveWindow: Bool { false }
 
@@ -71,6 +79,8 @@ final class TerminalContainerView: NSView {
         mountOrder = Self.nextMountOrder
         super.init(frame: frameRect)
         wantsLayer = true
+        // NSView no longer clips drawing to its bounds by default on macOS 14+.
+        clipsToBounds = true
         installMouseMonitor()
     }
 
@@ -79,6 +89,8 @@ final class TerminalContainerView: NSView {
         mountOrder = Self.nextMountOrder
         super.init(coder: coder)
         wantsLayer = true
+        // NSView no longer clips drawing to its bounds by default on macOS 14+.
+        clipsToBounds = true
         installMouseMonitor()
     }
 
@@ -88,6 +100,7 @@ final class TerminalContainerView: NSView {
 
     func attach(_ terminalView: LocalProcessTerminalView) {
         guard claimMount(for: terminalView) else { return }
+        updateSurfaceColor(terminalView.nativeBackgroundColor)
 
         guard terminal !== terminalView || terminalView.superview !== self else {
             updateTerminalFrame(terminalView)
@@ -116,7 +129,9 @@ final class TerminalContainerView: NSView {
     }
 
     func updateSurfaceColor(_ color: NSColor) {
+        surfaceColor = color
         layer?.backgroundColor = color.cgColor
+        needsDisplay = true
     }
 
     func detachTerminal() {

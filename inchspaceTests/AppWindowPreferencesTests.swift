@@ -122,10 +122,66 @@ final class AppWindowPreferencesTests: XCTestCase {
         XCTAssertTrue(reportedWindows.last === secondWindow)
     }
 
+    func testSuccessfulExternalOpenUsesNativeMiniaturization() {
+        let (defaults, suiteName) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let controller = AppVisibilityController(preferences: AppWindowPreferences(defaults: defaults))
+        let window = MiniaturizationWindow()
+        controller.registerMainWindow(window)
+
+        controller.minimizeAfterSuccessfulOpen(.init(runningApplication: nil, bundleIdentifier: "com.apple.finder"))
+
+        XCTAssertEqual(window.miniaturizeCount, 1)
+        XCTAssertEqual(window.tabbingMode, .disallowed)
+    }
+
+    func testDisabledPreferenceAndSelfOpenLeaveWindowAlone() {
+        let (defaults, suiteName) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let preferences = AppWindowPreferences(defaults: defaults)
+        let controller = AppVisibilityController(preferences: preferences)
+        let window = MiniaturizationWindow()
+        controller.registerMainWindow(window)
+
+        preferences.setHidesAfterOpen(false)
+        controller.minimizeAfterSuccessfulOpen(.init(runningApplication: nil, bundleIdentifier: "com.apple.finder"))
+        preferences.setHidesAfterOpen(true)
+        controller.minimizeAfterSuccessfulOpen(.init(runningApplication: .current, bundleIdentifier: Bundle.main.bundleIdentifier))
+
+        XCTAssertEqual(window.miniaturizeCount, 0)
+    }
+
+    func testInstancePriorityUsesLaunchDateThenProcessIdentifier() {
+        let earlier = Date(timeIntervalSince1970: 100)
+        let later = Date(timeIntervalSince1970: 200)
+        XCTAssertTrue(AppInstancePolicy.precedes(launchDate: earlier, processIdentifier: 200,
+                                               currentLaunchDate: later, currentProcessIdentifier: 100))
+        XCTAssertFalse(AppInstancePolicy.precedes(launchDate: later, processIdentifier: 100,
+                                                currentLaunchDate: earlier, currentProcessIdentifier: 200))
+        XCTAssertTrue(AppInstancePolicy.precedes(launchDate: earlier, processIdentifier: 100,
+                                               currentLaunchDate: earlier, currentProcessIdentifier: 200))
+        XCTAssertFalse(AppInstancePolicy.precedes(launchDate: nil, processIdentifier: 200,
+                                                currentLaunchDate: nil, currentProcessIdentifier: 100))
+        XCTAssertFalse(AppInstancePolicy.precedes(launchDate: earlier, processIdentifier: 100,
+                                                currentLaunchDate: earlier, currentProcessIdentifier: 100))
+    }
+
     private func makeDefaults() -> (UserDefaults, String) {
         let suiteName = "inchspace-tests-window-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         return (defaults, suiteName)
+    }
+}
+
+@MainActor
+private final class MiniaturizationWindow: NSWindow {
+    private(set) var miniaturizeCount = 0
+
+    override var isVisible: Bool { true }
+    override var isMiniaturized: Bool { miniaturizeCount > 0 }
+
+    override func miniaturize(_ sender: Any?) {
+        miniaturizeCount += 1
     }
 }

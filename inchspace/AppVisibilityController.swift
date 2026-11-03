@@ -159,7 +159,7 @@ extension Notification.Name {
 
 @MainActor
 final class AppVisibilityController: NSObject, ObservableObject {
-    static let shared = AppVisibilityController()
+    static let shared = AppVisibilityController(preferences: AppWindowPreferences())
 
     @Published private(set) var state: AppVisibilityState = .background
     @Published private(set) var shortcutRegistrationError: String?
@@ -174,8 +174,8 @@ final class AppVisibilityController: NSObject, ObservableObject {
     private var hasStarted = false
     private var hasScheduledStateRefresh = false
 
-    private override init() {
-        preferences = AppWindowPreferences()
+    init(preferences: AppWindowPreferences) {
+        self.preferences = preferences
         super.init()
         hotKeyManager.action = { [weak self] in
             self?.toggleFromGlobalShortcut()
@@ -231,6 +231,7 @@ final class AppVisibilityController: NSObject, ObservableObject {
             initializedWindows.add(window)
             window.identifier = NSUserInterfaceItemIdentifier("inchspace.mainWindow")
             window.isReleasedWhenClosed = false
+            window.tabbingMode = .disallowed
             window.setFrameAutosaveName("inchspace.mainWindow")
             if !window.isVisible {
                 applyInitialPosition(to: window)
@@ -249,8 +250,12 @@ final class AppVisibilityController: NSObject, ObservableObject {
         NSApp.unhide(nil)
 
         if let window = mainWindow {
-            if window.isMiniaturized { window.deminiaturize(nil) }
-            show(window, animated: !wasVisible)
+            if window.isMiniaturized {
+                window.deminiaturize(nil)
+                window.makeKeyAndOrderFront(nil)
+            } else {
+                show(window, animated: !wasVisible)
+            }
         } else {
             openMainWindow?()
         }
@@ -264,14 +269,11 @@ final class AppVisibilityController: NSObject, ObservableObject {
         state = .hidden
     }
 
-    func hideAfterSuccessfulOpen(_ destination: LaunchpadOpenService.OpenedDestination) {
-        guard preferences.hidesAfterOpen else { return }
-        hide()
-        // Workspace 的打开回调代表系统已接受请求；短暂让出事件循环后再次
-        // 激活目标，避免正在隐藏的工具窗口抢回前台。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-            destination.activate()
-        }
+    func minimizeAfterSuccessfulOpen(_ destination: LaunchpadOpenService.OpenedDestination) {
+        guard preferences.hidesAfterOpen, !destination.isCurrentApplication,
+              let window = mainWindow, window.isVisible, !window.isMiniaturized else { return }
+        window.miniaturize(nil)
+        scheduleStateRefresh()
     }
 
     func openSettings() {
@@ -520,7 +522,7 @@ final class AppVisibilityController: NSObject, ObservableObject {
     }
 }
 
-/// SwiftUI 的 WindowGroup 不暴露 NSWindow；用一个不可见视图只做一次桥接。
+/// SwiftUI 的 Window 不暴露 NSWindow；用一个不可见视图只做一次桥接。
 struct MainWindowBridge: NSViewRepresentable {
     @ObservedObject var controller: AppVisibilityController
 
@@ -577,8 +579,59 @@ struct WindowOpeningBridge: View {
     }
 }
 
+enum AppInstancePolicy {
+    static func precedes(
+        launchDate: Date?, processIdentifier: pid_t,
+        currentLaunchDate: Date?, currentProcessIdentifier: pid_t
+    ) -> Bool {
+        if let launchDate, let currentLaunchDate, launchDate != currentLaunchDate {
+            return launchDate < currentLaunchDate
+        }
+        return processIdentifier < currentProcessIdentifier
+    }
+}
+
 final class InchspaceApplicationDelegate: NSObject, NSApplicationDelegate {
+    private var isDuplicateInstance = false
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSWindow.allowsAutomaticWindowTabbing = false
+        // XCTest runs inside the application host and must not redirect to an installed copy.
+        guard NSClassFromString("XCTestCase") == nil,
+              let identifier = Bundle.main.bundleIdentifier else { return }
+        let current = NSRunningApplication.current
+        let existing = NSRunningApplication.runningApplications(withBundleIdentifier: identifier)
+            .filter {
+                !$0.isTerminated && $0.processIdentifier != current.processIdentifier
+                    && AppInstancePolicy.precedes(
+                        launchDate: $0.launchDate, processIdentifier: $0.processIdentifier,
+                        currentLaunchDate: current.launchDate,
+                        currentProcessIdentifier: current.processIdentifier
+                    )
+            }
+            .sorted {
+                AppInstancePolicy.precedes(
+                    launchDate: $0.launchDate, processIdentifier: $0.processIdentifier,
+                    currentLaunchDate: $1.launchDate, currentProcessIdentifier: $1.processIdentifier
+                )
+            }
+            .first
+        guard let existing else { return }
+        isDuplicateInstance = true
+        if let url = existing.bundleURL {
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.createsNewApplicationInstance = false
+            NSWorkspace.shared.openApplication(at: url, configuration: configuration) { _, _ in
+                Task { @MainActor in NSApp.terminate(nil) }
+            }
+        } else {
+            existing.activate(options: [.activateAllWindows])
+            NSApp.terminate(nil)
+        }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        guard !isDuplicateInstance else { return }
         AppVisibilityController.shared.start()
     }
 

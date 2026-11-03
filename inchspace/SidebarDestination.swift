@@ -13,6 +13,7 @@ enum SidebarDestination: String, Identifiable {
     case conversion
     case developer
     case runner
+    case pythonEnvironments
     case servers
     case remoteFiles
     case environmentVariables
@@ -32,6 +33,7 @@ enum SidebarDestination: String, Identifiable {
         case .conversion: "格式转换"
         case .developer: "开发工具"
         case .runner: "运行中心"
+        case .pythonEnvironments: "Python 环境"
         case .servers: "服务器"
         case .remoteFiles: "远程文件"
         case .environmentVariables: "环境变量"
@@ -51,6 +53,7 @@ enum SidebarDestination: String, Identifiable {
         case .conversion: "arrow.left.arrow.right"
         case .developer: "chevron.left.forwardslash.chevron.right"
         case .runner: "play.circle"
+        case .pythonEnvironments: "shippingbox"
         case .servers: "server.rack"
         case .remoteFiles: "folder.badge.gearshape"
         case .environmentVariables: "curlybraces"
@@ -76,6 +79,7 @@ enum SidebarDestination: String, Identifiable {
 
     static let runtimeItems: [SidebarDestination] = [
         .runner,
+        .pythonEnvironments,
     ]
 
     static let managementItems: [SidebarDestination] = [

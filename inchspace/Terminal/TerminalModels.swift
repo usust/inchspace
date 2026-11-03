@@ -48,6 +48,7 @@ enum TerminalSplitOrientation: String, CaseIterable, Identifiable {
 
 enum TerminalThemePreference: String, CaseIterable, Identifiable {
     case system
+    case inchspace
     case macOSDark
     case dracula
     case oneDark
@@ -62,6 +63,7 @@ enum TerminalThemePreference: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .system: "跟随系统"
+        case .inchspace: "寸空间深色"
         case .macOSDark: "macOS Dark"
         case .dracula: "Dracula"
         case .oneDark: "One Dark"
@@ -76,6 +78,7 @@ enum TerminalThemePreference: String, CaseIterable, Identifiable {
 
 enum TerminalPromptStyle: String, CaseIterable, Identifiable {
     case compactPath
+    case contextual
     case chevron
     case userAndHost
     case custom
@@ -84,6 +87,7 @@ enum TerminalPromptStyle: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .compactPath: "~/project ❯"
+        case .contextual: "双行 · 身份与路径"
         case .chevron: "❯"
         case .userAndHost: "user@mac %"
         case .custom: "自定义"
@@ -156,7 +160,6 @@ final class TerminalPreferences: ObservableObject {
         static let cursorShape = prefix + "cursorShape"
         static let cursorBlinks = prefix + "cursorBlinks"
         static let theme = prefix + "theme"
-        static let systemThemeMigration = prefix + "systemThemeMigration"
         static let customBackground = prefix + "customBackground"
         static let customForeground = prefix + "customForeground"
         static let customCursor = prefix + "customCursor"
@@ -184,27 +187,16 @@ final class TerminalPreferences: ObservableObject {
         fontSize = storedSize == 0 ? 14 : min(max(storedSize, 12), 18)
         fontFamily = defaults.string(forKey: Key.fontFamily) ?? "SF Mono"
         let storedLineHeight = defaults.double(forKey: Key.lineHeight)
-        lineHeight = storedLineHeight == 0 ? 1.12 : min(max(storedLineHeight, 1.0), 1.5)
+        lineHeight = storedLineHeight == 0 ? 1.20 : min(max(storedLineHeight, 1.0), 1.5)
         cursorShape = TerminalCursorShape(rawValue: defaults.string(forKey: Key.cursorShape) ?? "") ?? .block
         cursorBlinks = defaults.object(forKey: Key.cursorBlinks) as? Bool ?? true
         let storedTheme = TerminalThemePreference(rawValue: defaults.string(forKey: Key.theme) ?? "")
-        if !defaults.bool(forKey: Key.systemThemeMigration) {
-            // macOS Dark was the original implicit default. Migrate that legacy
-            // value once now that terminal surfaces follow the app appearance.
-            let migratedTheme: TerminalThemePreference = storedTheme == .macOSDark
-                ? .system
-                : (storedTheme ?? .system)
-            theme = migratedTheme
-            defaults.set(migratedTheme.rawValue, forKey: Key.theme)
-            defaults.set(true, forKey: Key.systemThemeMigration)
-        } else {
-            theme = storedTheme ?? .system
-        }
+        theme = storedTheme ?? .inchspace
         customBackgroundColor = defaults.string(forKey: Key.customBackground) ?? "#1E1E1E"
         customForegroundColor = defaults.string(forKey: Key.customForeground) ?? "#E6E6E6"
         customCursorColor = defaults.string(forKey: Key.customCursor) ?? "#0A84FF"
         customSelectionColor = defaults.string(forKey: Key.customSelection) ?? "#0A84FF59"
-        promptStyle = TerminalPromptStyle(rawValue: defaults.string(forKey: Key.promptStyle) ?? "") ?? .compactPath
+        promptStyle = TerminalPromptStyle(rawValue: defaults.string(forKey: Key.promptStyle) ?? "") ?? .contextual
         customPrompt = defaults.string(forKey: Key.customPrompt) ?? "❯ "
         cleanShellStartup = defaults.object(forKey: Key.cleanStartup) as? Bool ?? true
         copySelectionAutomatically = defaults.object(forKey: Key.autoCopy) as? Bool ?? true
@@ -214,6 +206,12 @@ final class TerminalPreferences: ObservableObject {
         automaticallyReconnect = defaults.bool(forKey: Key.reconnect)
         inheritWorkingDirectory = defaults.object(forKey: Key.inheritDirectory) as? Bool ?? true
         isLoading = false
+    }
+
+    func applyRecommendedAppearance() {
+        theme = .inchspace
+        promptStyle = .contextual
+        lineHeight = 1.20
     }
 
     var resolvedShell: String {

@@ -236,6 +236,7 @@ xcodebuild test \
   -destination 'platform=macOS' \
   -clonedSourcePackagesDirPath "$source_packages" \
   -derivedDataPath "$test_derived_data" \
+  ENABLE_HARDENED_RUNTIME=NO \
   CODE_SIGN_STYLE=Manual \
   CODE_SIGN_IDENTITY=- \
   DEVELOPMENT_TEAM= \

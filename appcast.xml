@@ -1,0 +1,24 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>inchspace</title>
+        <item>
+            <title>0.0.18</title>
+            <pubDate>Mon, 09 Nov 2026 21:13:33 +0800</pubDate>
+            <link>https://github.com/usust/inchspace</link>
+            <sparkle:version>2</sparkle:version>
+            <sparkle:shortVersionString>0.0.18</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# inchspace 0.0.18
+
+- 新增原生 Xen 集群管理：集群连接、主机与虚拟机清单、虚拟机配置与电源操作、存储和网络管理。
+- 新增 Xen 控制台、XVA 导入导出、任务状态、监控与告警；部分高级操作仍保留保护限制，真实服务器兼容性需继续验证。
+- 修复 Xen 自签名证书选项的逐连接处理。
+- 改进远程文件拖入上传、同名文件冲突排队及切换连接后的传输状态处理。
+- 修复启动台空白区域交互与终端右键菜单可用状态，优化服务器和 Python 环境界面布局。
+- 改进应用修复结果提示，明确展示隔离属性、签名与系统验证状态。
+]]></description>
+            <enclosure url="https://github.com/usust/inchspace/releases/download/v0.0.18/inchspace-0.0.18.dmg" length="13028022" type="application/octet-stream" sparkle:edSignature="L5sNQjWWj+rUoFwzQ+IVM9UCIMbvkXYofIcCoqMq8GxP3td2zRSJbV+F4J1bn10fS3F+he5ALYWlNCe/8LyEDw=="/>
+        </item>
+    </channel>
+</rss>

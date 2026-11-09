@@ -53,6 +53,7 @@ Config/Secrets.xcconfig
 *.p8
 *.p12
 *.mobileprovision
+inchspace-sparkle-private-key.txt
 
 # Locally generated release artifacts
 Artifacts/

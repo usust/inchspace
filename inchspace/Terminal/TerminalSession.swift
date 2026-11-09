@@ -553,6 +553,17 @@ private final class SessionTerminalView: LocalProcessTerminalView {
         return menu
     }
 
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        switch item.action {
+        case #selector(askAIFromMenu(_:)):
+            return selection.active && !selection.getSelectedText().isEmpty && onAskAI != nil
+        case #selector(clearFromMenu(_:)):
+            return true
+        default:
+            return super.validateUserInterfaceItem(item)
+        }
+    }
+
     @objc private func clearFromMenu(_ sender: Any?) {
         clearTerminalScreen()
     }

@@ -80,40 +80,40 @@ struct LaunchpadGridView: View {
 
         VStack(spacing: 8) {
             ZStack {
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture(perform: exitEditing)
-                    .contextMenu {
-                        Button(category.addTitle, systemImage: "plus", action: onAddItem)
-                    }
-
                 if entries.isEmpty {
+                    emptyAreaInteractionSurface
+
                     ContentUnavailableView {
                         Label("还没有\(category.title)", systemImage: emptySymbol)
                     } description: {
                         Text(category.emptyDescription)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .allowsHitTesting(false)
                 } else {
-                    ScrollView(.vertical) {
-                        LazyVGrid(
-                            columns: metrics.gridItems,
-                            alignment: .leading,
-                            spacing: metrics.verticalSpacing
-                        ) {
-                            ForEach(displayedEntries) { entry in
-                                entryCell(
-                                    entry,
-                                    availableGroups: availableGroups,
-                                    metrics: metrics,
-                                    pageIndex: currentPage
-                                )
-                                    .frame(height: metrics.cellHeight)
+                    GeometryReader { viewport in
+                        ScrollView(.vertical) {
+                            LazyVGrid(
+                                columns: metrics.gridItems,
+                                alignment: .leading,
+                                spacing: metrics.verticalSpacing
+                            ) {
+                                ForEach(displayedEntries) { entry in
+                                    entryCell(
+                                        entry,
+                                        availableGroups: availableGroups,
+                                        metrics: metrics,
+                                        pageIndex: currentPage
+                                    )
+                                        .frame(height: metrics.cellHeight)
+                                }
                             }
+                            .padding(.horizontal, metrics.horizontalPadding)
+                            .frame(width: metrics.contentWidth, alignment: .leading)
+                            .padding(.top, 10)
+                            .frame(minHeight: viewport.size.height, alignment: .topLeading)
+                            .background { emptyAreaInteractionSurface }
                         }
-                        .padding(.horizontal, metrics.horizontalPadding)
-                        .frame(width: metrics.contentWidth, alignment: .leading)
-                        .padding(.top, 10)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .id("\(category.rawValue)-\(currentPage)")
@@ -136,6 +136,10 @@ struct LaunchpadGridView: View {
                     .allowsHitTesting(false)
                     .zIndex(20)
                 }
+            }
+            .contentShape(Rectangle())
+            .contextMenu {
+                Button(category.addTitle, systemImage: "plus", action: onAddItem)
             }
             .background {
                 ScrollWheelMonitor { direction in
@@ -165,6 +169,14 @@ struct LaunchpadGridView: View {
             )
             .padding(.bottom, 16)
         }
+    }
+
+    // Keep blank-area taps inside the scroll content. The enclosing container
+    // owns the context menu so the grid cannot cover its interaction surface.
+    private var emptyAreaInteractionSurface: some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .onTapGesture(perform: exitEditing)
     }
 
     /// Keep the dragged cell alive so its gesture continues receiving events.

@@ -25,6 +25,42 @@ final class AppRepairServiceTests: XCTestCase {
         XCTAssertFalse(report.needsRepair)
     }
 
+    func testRemovalResultOnlySucceedsWhenAllChecksPass() {
+        for hasQuarantine in [false, true] {
+            for structureIsValid in [false, true] {
+                for signatureAccepted in [false, true] {
+                    for gatekeeperAccepted in [false, true] {
+                        let report = AppRepairReport(
+                            url: URL(fileURLWithPath: "/Applications/Test.app"),
+                            displayName: "Test",
+                            bundleIdentifier: nil,
+                            version: nil,
+                            architectures: [],
+                            hasQuarantine: hasQuarantine,
+                            signatureAccepted: signatureAccepted,
+                            gatekeeperAccepted: gatekeeperAccepted,
+                            structureIsValid: structureIsValid,
+                            findings: []
+                        )
+                        let expectedSuccess = !hasQuarantine && structureIsValid
+                            && signatureAccepted && gatekeeperAccepted
+                        XCTAssertEqual(report.removalPassedValidation, expectedSuccess)
+                        XCTAssertEqual(report.removalResultKind, expectedSuccess ? .success : .warning)
+                        if hasQuarantine {
+                            XCTAssertEqual(report.removalResultTitle, "仍检测到下载隔离属性")
+                        } else if expectedSuccess {
+                            XCTAssertEqual(report.removalResultTitle, "隔离属性已移除，重新验证通过")
+                            XCTAssertTrue(report.removalResultDetail.contains("单独授权"))
+                        } else {
+                            XCTAssertEqual(report.removalResultTitle, "隔离属性已移除，仍有验证问题")
+                            XCTAssertTrue(report.removalResultDetail.contains("不会恢复或授予隐私权限"))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private func makeTestApplication(name: String = "Test App.app") throws -> URL {
         let directoryURL = FileManager.default.temporaryDirectory
             .appending(path: "inchspace-app-repair-\(UUID().uuidString)", directoryHint: .isDirectory)

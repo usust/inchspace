@@ -42,6 +42,29 @@ struct AppRepairReport: Sendable {
 
     var needsRepair: Bool { hasQuarantine }
 
+    // 完成移除操作不代表签名、系统信任或隐私权限已经恢复。
+    var removalPassedValidation: Bool {
+        !hasQuarantine && structureIsValid && signatureAccepted && gatekeeperAccepted
+    }
+
+    var removalResultKind: AppRepairFindingKind {
+        removalPassedValidation ? .success : .warning
+    }
+
+    var removalResultTitle: String {
+        if hasQuarantine { return "仍检测到下载隔离属性" }
+        if !removalPassedValidation { return "隔离属性已移除，仍有验证问题" }
+        return "隔离属性已移除，重新验证通过"
+    }
+
+    var removalResultDetail: String {
+        if hasQuarantine { return "移除未完成，请重新检测应用状态。" }
+        if !removalPassedValidation {
+            return "应用结构、签名或 Gatekeeper 验证仍有异常。此操作不能清除系统的拦截记录，也不会恢复或授予隐私权限。"
+        }
+        return "应用结构、签名与 Gatekeeper 检查通过；本地网络等隐私权限仍需由 macOS 单独授权。"
+    }
+
     var summary: String {
         if !structureIsValid { return "应用结构可能不完整" }
         if hasQuarantine { return "发现可修复的下载隔离属性" }

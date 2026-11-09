@@ -27,6 +27,42 @@ final class RemoteFileViewModel: ObservableObject {
     private let remoteService = RemoteFileService()
     private let defaults = UserDefaults.standard
     private var remoteRequestID = UUID()
+    private(set) var connectionGeneration = UUID()
+    private var conflictQueue: [PendingTransferConflict] = []
+    private var conflictSheetActive = false
+
+    func queueConflict(_ conflict: PendingTransferConflict) {
+        conflictQueue.append(conflict)
+        presentNextConflict()
+    }
+
+    private func presentNextConflict() {
+        guard !conflictSheetActive, !conflictQueue.isEmpty else { return }
+        conflictSheetActive = true
+        pendingConflict = conflictQueue.removeFirst()
+    }
+
+    func conflictSheetDismissed() {
+        pendingConflict = nil
+        conflictSheetActive = false
+        presentNextConflict()
+    }
+
+    private func resetPendingTransfers() {
+        connectionGeneration = UUID()
+        conflictQueue.removeAll()
+        pendingConflict = nil
+    }
+
+    func uploadURLs(_ urls: [URL], to destination: String, generation: UUID) {
+        guard generation == connectionGeneration, connectionState == .connected else { return }
+        var items: [FileItem] = []
+        for url in urls {
+            do { items.append(try localService.item(at: url)) }
+            catch { presentedError = ServerPresentedError(error) }
+        }
+        upload(items, to: destination)
+    }
 
     init() {
         localPath = UserDefaults.standard.string(forKey: "remoteFiles.lastLocalPath") ?? FileManager.default.homeDirectoryForCurrentUser.path
@@ -38,6 +74,7 @@ final class RemoteFileViewModel: ObservableObject {
 
     func selectServer(_ server: Server?, credential: SSHCredential?) {
         guard let server else { disconnect(); return }
+        resetPendingTransfers()
         selectedServerID = server.id
         connectionState = .connecting
         Task {
@@ -60,6 +97,7 @@ final class RemoteFileViewModel: ObservableObject {
     }
 
     func disconnect() {
+        resetPendingTransfers()
         remoteRequestID = UUID()
         isRemoteLoading = false
         remoteService.disconnect()
@@ -138,15 +176,22 @@ final class RemoteFileViewModel: ObservableObject {
     func localUp() { let parent = (localPath as NSString).deletingLastPathComponent; guard !parent.isEmpty, parent != localPath else { return }; navigateLocal(to: parent) }
     func remoteUp() { let parent = (remotePath as NSString).deletingLastPathComponent; guard !parent.isEmpty, parent != remotePath else { return }; Task { await navigateRemote(to: parent) } }
 
-    func upload(_ items: [FileItem]? = nil) {
+    func upload(_ items: [FileItem]? = nil, to directory: String? = nil) {
         let values = items ?? selectedLocalItems
         guard !values.isEmpty, connectionState == .connected else { return }
         showsTransfers = true
-        for item in values {
-            let destination = join(remotePath, item.name)
-            Task {
-                if await remoteService.exists(destination) {
-                    pendingConflict = PendingTransferConflict(direction: .upload, item: item, destination: destination, existingSize: await remoteService.remoteSize(destination))
+        let target = directory ?? remotePath
+        let generation = connectionGeneration
+        Task {
+            for item in values {
+                guard generation == connectionGeneration, connectionState == .connected else { return }
+                let destination = join(target, item.name)
+                let exists = await remoteService.exists(destination)
+                guard generation == connectionGeneration else { return }
+                if exists {
+                    let size = await remoteService.remoteSize(destination)
+                    guard generation == connectionGeneration else { return }
+                    queueConflict(PendingTransferConflict(direction: .upload, item: item, destination: destination, existingSize: size))
                 } else {
                     enqueueUpload(item, destination: destination)
                 }
@@ -162,7 +207,7 @@ final class RemoteFileViewModel: ObservableObject {
             let destination = URL(fileURLWithPath: localPath).appending(path: item.name).path
             if FileManager.default.fileExists(atPath: destination) {
                 let size = Self.localTreeSizeStatic(destination)
-                pendingConflict = PendingTransferConflict(direction: .download, item: item, destination: destination, existingSize: size)
+                queueConflict(PendingTransferConflict(direction: .download, item: item, destination: destination, existingSize: size))
             } else {
                 if item.kind == .directory {
                     Task { enqueueDownload(item, destination: destination, totalBytes: await remoteService.treeSize(item)) }
@@ -176,17 +221,32 @@ final class RemoteFileViewModel: ObservableObject {
     func resolveConflict(_ choice: TransferConflictChoice) {
         guard let conflict = pendingConflict else { return }
         pendingConflict = nil
+        let generation = connectionGeneration
         switch choice {
         case .cancel: return
         case .replace:
-            if conflict.direction == .upload { Task { try? await remoteService.delete([FileItem(name: conflict.item.name, path: conflict.destination, kind: conflict.item.kind)]); enqueueUpload(conflict.item, destination: conflict.destination) } }
+            if conflict.direction == .upload {
+                Task {
+                    guard generation == connectionGeneration else { return }
+                    do {
+                        try await remoteService.delete([FileItem(name: conflict.item.name, path: conflict.destination, kind: conflict.item.kind)])
+                        guard generation == connectionGeneration else { return }
+                        enqueueUpload(conflict.item, destination: conflict.destination)
+                    } catch { if generation == connectionGeneration { presentedError = ServerPresentedError(error) } }
+                }
+            }
             else {
                 try? FileManager.default.removeItem(atPath: conflict.destination)
                 Task { enqueueDownload(conflict.item, destination: conflict.destination, totalBytes: await remoteService.treeSize(conflict.item)) }
             }
         case .keepBoth:
             if conflict.direction == .upload {
-                Task { enqueueUpload(conflict.item, destination: await availableRemotePath(conflict.destination)) }
+                Task {
+                    guard generation == connectionGeneration else { return }
+                    let destination = await availableRemotePath(conflict.destination)
+                    guard generation == connectionGeneration else { return }
+                    enqueueUpload(conflict.item, destination: destination)
+                }
             } else {
                 let destination = availableLocalPath(conflict.destination)
                 Task { enqueueDownload(conflict.item, destination: destination, totalBytes: await remoteService.treeSize(conflict.item)) }

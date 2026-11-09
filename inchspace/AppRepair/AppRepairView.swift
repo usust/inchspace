@@ -27,14 +27,14 @@ struct AppRepairView: View {
             Alert(title: Text(error.title), message: Text(error.message), dismissButton: .default(Text("好")))
         }
         .confirmationDialog(
-            "修复“\(model.report?.displayName ?? "应用")”？",
+            "移除“\(model.report?.displayName ?? "应用")”的隔离属性？",
             isPresented: $showsRepairConfirmation,
             titleVisibility: .visible
         ) {
-            Button("移除隔离属性并修复") { model.repair() }
+            Button("移除下载隔离属性") { model.repair() }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("将递归移除此应用的下载隔离属性，然后刷新 Launch Services 并重新验证。不会修改应用代码或关闭系统安全功能；仅在应用归其他用户或系统所有时请求管理员授权。")
+            Text("仅对来源可信的应用使用。将递归移除下载隔离属性，刷新 Launch Services 并重新验证；这可能绕过下载隔离触发的安全检查，但不会修复签名、清除系统拦截提示或授予本地网络等隐私权限。不会重签名或关闭系统安全功能；必要时请求管理员授权。")
         }
     }
 
@@ -92,6 +92,7 @@ struct AppRepairView: View {
             applicationCard(report)
             findingsCard(report)
             actionCard(report)
+            privacyGuidance
         }
     }
 
@@ -179,12 +180,27 @@ struct AppRepairView: View {
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
             } else {
-                Button("一键修复") { showsRepairConfirmation = true }
+                Button("移除隔离属性") { showsRepairConfirmation = true }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
                     .disabled(!report.needsRepair || !report.structureIsValid)
             }
         }
+        .padding(20)
+        .appSurface()
+    }
+
+    private var privacyGuidance: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("安全放行与隐私授权是两回事", systemImage: "hand.raised")
+                .font(.headline)
+            Text("移除下载隔离属性不会授予本地网络、辅助功能或屏幕录制权限，也不保证系统设置中的“已阻止”提示消失。签名完整性检查通过，也不等于应用来自已验证的开发者。")
+            Text("若应用仍被阻止，优先从开发者官方渠道获取已签名并公证的版本。仅在确认来源可信后，才考虑在系统设置 → 隐私与安全性中使用“仍要打开”。")
+            Text("若无法访问本地网络，请在系统设置 → 隐私与安全性 → 本地网络中检查该应用的开关。若没有条目，重新打开应用并实际触发局域网访问；仍无提示或连接失败时，需要进一步检查应用本身。不要通过强制重签名或清空所有隐私授权来处理。")
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(20)
         .appSurface()
     }
@@ -200,8 +216,8 @@ struct AppRepairView: View {
 
     private var actionTitle: String {
         switch model.phase {
-        case .repairing: "正在修复…"
-        case .repaired: "修复完成，可以重新打开应用"
+        case .repairing: "正在移除隔离属性…"
+        case .repaired: model.report?.removalResultTitle ?? "隔离属性处理结束"
         default: model.report?.summary ?? "准备修复"
         }
     }
@@ -210,16 +226,22 @@ struct AppRepairView: View {
         switch model.phase {
         case .repairing: "正在移除隔离属性并重新验证应用状态"
         case .repaired:
-            if model.report?.gatekeeperAccepted == true { "隔离属性已移除，应用已通过重新验证。" }
-            else { "隔离属性已移除。应用签名或来源仍未通过 Gatekeeper，请仅在信任来源时打开。" }
+            model.report?.removalResultDetail ?? "请重新检测应用状态。"
         default:
             if model.report?.needsRepair == true { "移除下载隔离属性，并刷新系统中的应用注册信息。" }
             else { "当前没有可由本工具安全自动修复的项目。" }
         }
     }
 
-    private var actionSymbol: String { model.phase == .repaired ? "checkmark" : "wrench.and.screwdriver" }
-    private var actionColor: Color { model.phase == .repaired ? .green : .accentColor }
+    private var actionSymbol: String {
+        guard model.phase == .repaired else { return "wrench.and.screwdriver" }
+        return (model.report?.removalResultKind ?? .warning).symbolName
+    }
+
+    private var actionColor: Color {
+        guard model.phase == .repaired else { return .accentColor }
+        return color(for: model.report?.removalResultKind ?? .warning)
+    }
 
     private func color(for kind: AppRepairFindingKind) -> Color {
         switch kind {

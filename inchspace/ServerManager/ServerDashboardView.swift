@@ -4,12 +4,14 @@ import UniformTypeIdentifiers
 
 struct ServerDashboardView: View {
     @ObservedObject var manager: ServerManager
+    @ObservedObject var xenStore: XenStore
+    @State private var selectedClusterID: UUID?
+    @State private var showsXenEditor = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var scope: ServerScope = .all
     @State private var selectedServerID: UUID?
-    @State private var showsEditor = false
-    @State private var editingServer: Server?
+    @State private var editorPresentation: ServerEditorPresentation?
     @State private var showsQuickConnect = false
     @State private var showsSSHImporter = false
     @State private var groupPrompt: DashboardGroupPrompt?
@@ -21,68 +23,86 @@ struct ServerDashboardView: View {
             DashboardBackground()
 
             VStack(spacing: 0) {
-                toolbar
-
-                if manager.servers.isEmpty {
-                    emptyState
-                } else if let selectedServer {
-                    ServerDetailPanel(
-                        server: selectedServer,
-                        credential: manager.credential(for: selectedServer),
-                        group: manager.group(for: selectedServer),
-                        tags: manager.tags(for: selectedServer),
-                        status: manager.statuses[selectedServer.id] ?? ServerStatus(),
-                        lastConnectedAt: manager.lastConnection(for: selectedServer),
-                        connect: { manager.connect(to: selectedServer) },
-                        refresh: { Task { await manager.refreshStatus(for: selectedServer) } },
-                        edit: { edit(selectedServer) },
-                        copyConfiguration: { manager.copyConfiguration(for: selectedServer) },
-                        delete: { pendingServerDeletion = selectedServer },
-                        back: { withAnimation(reduceMotion ? nil : AppMotion.transition) { selectedServerID = nil } }
-                    )
-                    .id(selectedServer.id)
-                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .trailing)))
+                if let cluster = xenStore.clusters.first(where: { $0.id == selectedClusterID }) {
+                    XenClusterView(store: xenStore, cluster: cluster) { selectedClusterID = nil }
                 } else {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 30) {
-                            ServerGroups(
-                                groups: manager.groups,
-                                servers: manager.servers,
-                                selection: $scope,
-                                createGroup: { groupPrompt = DashboardGroupPrompt() },
-                                editGroup: { groupPrompt = DashboardGroupPrompt(group: $0) },
-                                deleteGroup: { pendingGroupDeletion = $0 },
-                                moveServer: manager.move
-                            )
+                    toolbar
 
-                            ServerCardGrid(
-                                servers: matchingServers,
-                                allGroups: manager.groups,
-                                statusForServer: { manager.statuses[$0.id] ?? ServerStatus() },
-                                isFavorite: manager.isFavorite,
-                                select: { server in
-                                    withAnimation(reduceMotion ? nil : AppMotion.transition) { selectedServerID = server.id }
-                                },
-                                connect: manager.connect,
-                                toggleFavorite: manager.toggleFavorite,
-                                edit: edit,
-                                duplicate: manager.duplicate,
-                                delete: { pendingServerDeletion = $0 },
-                                move: manager.move
-                            )
+                    if manager.servers.isEmpty && xenStore.clusters.isEmpty {
+                        emptyState
+                    } else if let selectedServer {
+                        ServerDetailPanel(
+                            server: selectedServer,
+                            credential: manager.credential(for: selectedServer),
+                            group: manager.group(for: selectedServer),
+                            tags: manager.tags(for: selectedServer),
+                            status: manager.statuses[selectedServer.id] ?? ServerStatus(),
+                            lastConnectedAt: manager.lastConnection(for: selectedServer),
+                            connect: { manager.connect(to: selectedServer) },
+                            refresh: { Task { await manager.refreshStatus(for: selectedServer) } },
+                            edit: { edit(selectedServer) },
+                            copyConfiguration: { manager.copyConfiguration(for: selectedServer) },
+                            delete: { pendingServerDeletion = selectedServer },
+                            back: { withAnimation(reduceMotion ? nil : AppMotion.transition) { selectedServerID = nil } }
+                        )
+                        .id(selectedServer.id)
+                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .trailing)))
+                    } else {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 30) {
+                                if !manager.servers.isEmpty {
+                                    ServerGroups(
+                                        groups: manager.groups,
+                                        servers: manager.servers,
+                                        selection: $scope,
+                                        createGroup: { groupPrompt = DashboardGroupPrompt() },
+                                        editGroup: { groupPrompt = DashboardGroupPrompt(group: $0) },
+                                        deleteGroup: { pendingGroupDeletion = $0 },
+                                        moveServer: manager.move
+                                    )
+
+                                    ServerCardGrid(
+                                        servers: matchingServers,
+                                        allGroups: manager.groups,
+                                        statusForServer: { manager.statuses[$0.id] ?? ServerStatus() },
+                                        isFavorite: manager.isFavorite,
+                                        select: { server in
+                                            withAnimation(reduceMotion ? nil : AppMotion.transition) { selectedServerID = server.id }
+                                        },
+                                        connect: manager.connect,
+                                        toggleFavorite: manager.toggleFavorite,
+                                        edit: edit,
+                                        duplicate: manager.duplicate,
+                                        delete: { pendingServerDeletion = $0 },
+                                        move: manager.move
+                                    )
+                                }
+                                if !xenStore.clusters.isEmpty {
+                                    XenClusterSection(store: xenStore) { cluster in selectedClusterID = cluster.id }
+                                }
+                            }
+                            .padding(AppLayout.pagePadding)
+                            .frame(maxWidth: AppLayout.contentMaxWidth, alignment: .leading)
+                            .frame(maxWidth: .infinity)
                         }
-                        .padding(AppLayout.pagePadding)
-                        .frame(maxWidth: AppLayout.contentMaxWidth, alignment: .leading)
-                        .frame(maxWidth: .infinity)
+                        .scrollContentBackground(.hidden)
+                        .scrollBounceBehavior(.basedOnSize)
+                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .leading)))
                     }
-                    .scrollContentBackground(.hidden)
-                    .scrollBounceBehavior(.basedOnSize)
-                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .leading)))
                 }
             }
         }
-        .sheet(isPresented: $showsEditor) {
-            ServerEditorView(manager: manager, server: editingServer) { saved in
+        .sheet(isPresented: $showsXenEditor) {
+            XenClusterEditor(store: xenStore) { cluster in
+                selectedClusterID = cluster.id
+                Task { await xenStore.connect(cluster) }
+            }
+        }
+        .alert("Xen 集群", isPresented: Binding(get: { xenStore.error != nil }, set: { if !$0 { xenStore.error = nil } })) {
+            Button("好", role: .cancel) { xenStore.error = nil }
+        } message: { Text(xenStore.error ?? "") }
+        .sheet(item: $editorPresentation) { presentation in
+            ServerEditorView(manager: manager, server: presentation.server) { saved in
                 selectedServerID = saved.id
             }
         }
@@ -156,11 +176,13 @@ struct ServerDashboardView: View {
                 .buttonStyle(.glass)
                 .buttonBorderShape(.capsule)
 
-            Button {
-                editingServer = nil
-                showsEditor = true
+            Menu {
+                Button("添加服务器…", systemImage: "server.rack") { editorPresentation = ServerEditorPresentation() }
+                Button("添加 Xen 集群…", systemImage: "square.stack.3d.up") { showsXenEditor = true }
+                Divider()
+                Button("导入 SSH 配置…", systemImage: "square.and.arrow.down") { showsSSHImporter = true }
             } label: {
-                Label("添加服务器", systemImage: "plus.circle.fill")
+                Label("添加", systemImage: "plus")
             }
             .buttonStyle(.glassProminent)
             .buttonBorderShape(.capsule)
@@ -197,10 +219,12 @@ struct ServerDashboardView: View {
             Text("添加你的第一台服务器")
                 .font(.system(size: 23, weight: .semibold, design: .rounded))
             Button("添加服务器", systemImage: "plus.circle.fill") {
-                editingServer = nil
-                showsEditor = true
+                editorPresentation = ServerEditorPresentation()
             }
             .buttonStyle(.borderedProminent)
+            Button("添加 Xen 集群…", systemImage: "square.stack.3d.up") { showsXenEditor = true }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
             Button("从 SSH 配置导入…", systemImage: "square.and.arrow.down") {
                 showsSSHImporter = true
             }
@@ -227,9 +251,13 @@ struct ServerDashboardView: View {
     }
 
     private func edit(_ server: Server) {
-        editingServer = server
-        showsEditor = true
+        editorPresentation = ServerEditorPresentation(server: server)
     }
+}
+
+struct ServerEditorPresentation: Identifiable {
+    let id = UUID()
+    var server: Server?
 }
 
 enum ServerScope: Hashable {

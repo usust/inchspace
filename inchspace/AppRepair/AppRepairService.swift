@@ -62,8 +62,10 @@ struct AppRepairService: Sendable {
         findings.append(.init(
             id: "signature",
             kind: signatureAccepted ? .success : .warning,
-            title: signatureAccepted ? "代码签名有效" : "代码签名未通过验证",
-            detail: signatureAccepted ? nil : conciseOutput(signature.output, fallback: "应用可能未签名，或安装内容曾被修改。")
+            title: signatureAccepted ? "代码签名完整性检查通过" : "代码签名未通过验证",
+            detail: signatureAccepted
+                ? "此检查不代表开发者身份已验证或应用已公证；系统信任状态请查看 Gatekeeper 结果。"
+                : conciseOutput(signature.output, fallback: "应用可能未签名，或安装内容曾被修改。")
         ))
         findings.append(.init(
             id: "integrity",

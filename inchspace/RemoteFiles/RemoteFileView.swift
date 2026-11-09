@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct RemoteFileView: View {
     @ObservedObject var model: RemoteFileViewModel
@@ -54,7 +55,7 @@ struct RemoteFileView: View {
         .animation(reduceMotion ? nil : AppMotion.transition, value: model.showsTransfers)
         .alert(item: $model.presentedError) { error in Alert(title: Text(error.title), message: Text(error.message), dismissButton: .default(Text("好"))) }
         .sheet(item: $model.pendingTrust) { request in trustSheet(request) }
-        .sheet(item: $model.pendingConflict) { conflict in conflictSheet(conflict) }
+        .sheet(item: $model.pendingConflict, onDismiss: model.conflictSheetDismissed) { conflict in conflictSheet(conflict) }
         .sheet(item: $model.fileNamePrompt) { prompt in fileNameSheet(prompt) }
         .confirmationDialog("永久删除所选远程项目？", isPresented: Binding(get: { !model.pendingRemoteDeletion.isEmpty }, set: { if !$0 { model.pendingRemoteDeletion = [] } }), titleVisibility: .visible) {
             Button("永久删除", role: .destructive) { model.deleteRemoteConfirmed() }
@@ -146,18 +147,9 @@ struct RemoteFileView: View {
             .contextMenu(forSelectionType: String.self) { ids in
                 selectionMenu(items.filter { ids.contains($0.id) }, isLocal: isLocal)
             }
-            .dropDestination(for: URL.self) { urls, _ in guard !isLocal else { return false }; let lookup = Dictionary(uniqueKeysWithValues: model.localItems.map { (URL(fileURLWithPath: $0.path), $0) }); model.upload(urls.compactMap { lookup[$0] }); return true } isTargeted: { if !isLocal { remoteDropTargeted = $0 } }
-            .dropDestination(for: String.self) { values, _ in
-                if isLocal {
-                    let paths = Set(values.compactMap { $0.hasPrefix("inchspace-remote:") ? String($0.dropFirst(17)) : nil })
-                    model.download(model.remoteItems.filter { paths.contains($0.path) })
-                    return !paths.isEmpty
-                } else {
-                    let paths = Set(values.compactMap { $0.hasPrefix("inchspace-local:") ? String($0.dropFirst(16)) : nil })
-                    model.upload(model.localItems.filter { paths.contains($0.path) })
-                    return !paths.isEmpty
-                }
-            } isTargeted: { targeted in if isLocal { localDropTargeted = targeted } else { remoteDropTargeted = targeted } }
+            .onDrop(of: isLocal ? [UTType.text] : [UTType.fileURL, UTType.text], isTargeted: isLocal ? $localDropTargeted : $remoteDropTargeted) { providers in
+                receiveDrop(providers, isLocal: isLocal)
+            }
             .overlay { if (isLocal ? localDropTargeted : remoteDropTargeted) { RoundedRectangle(cornerRadius: 10).strokeBorder(Color.accentColor, lineWidth: 2).padding(5).allowsHitTesting(false) } }
             .overlay {
                 if !isLocal, model.isRemoteLoading {
@@ -174,6 +166,53 @@ struct RemoteFileView: View {
         .clipShape(RoundedRectangle(cornerRadius: AppLayout.cardRadius, style: .continuous))
         .appSurface()
         .padding(.horizontal, 4)
+    }
+
+    private func receiveDrop(_ providers: [NSItemProvider], isLocal: Bool) -> Bool {
+        guard model.connectionState == .connected else { return false }
+        let accepted = providers.filter {
+            (!isLocal && $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)) || $0.canLoadObject(ofClass: NSString.self)
+        }
+        guard !accepted.isEmpty else { return false }
+        let generation = model.connectionGeneration
+        let destination = model.remotePath
+        let sourceItems = isLocal ? model.remoteItems : model.localItems
+        Task { @MainActor in
+            var urls: [URL] = []
+            var paths: Set<String> = []
+            for provider in accepted {
+                do {
+                    if !isLocal, provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                        let data: Data = try await withCheckedThrowingContinuation { continuation in
+                            _ = provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { data, error in
+                                if let data { continuation.resume(returning: data) }
+                                else { continuation.resume(throwing: error ?? CocoaError(.fileReadCorruptFile)) }
+                            }
+                        }
+                        guard let url = URL(dataRepresentation: data, relativeTo: nil), url.isFileURL else { throw CocoaError(.fileReadUnsupportedScheme) }
+                        urls.append(url)
+                    } else {
+                        let value: String = try await withCheckedThrowingContinuation { continuation in
+                            _ = provider.loadObject(ofClass: NSString.self) { value, error in
+                                if let value = value as? String { continuation.resume(returning: value) }
+                                else { continuation.resume(throwing: error ?? CocoaError(.fileReadCorruptFile)) }
+                            }
+                        }
+                        let prefix = isLocal ? "inchspace-remote:" : "inchspace-local:"
+                        if value.hasPrefix(prefix) { paths.insert(String(value.dropFirst(prefix.count))) }
+                    }
+                } catch {
+                    if generation == model.connectionGeneration { model.presentedError = ServerPresentedError(error) }
+                }
+            }
+            guard generation == model.connectionGeneration, model.connectionState == .connected else { return }
+            if isLocal { model.download(sourceItems.filter { paths.contains($0.path) }) }
+            else {
+                urls.append(contentsOf: sourceItems.filter { paths.contains($0.path) }.map { URL(fileURLWithPath: $0.path) })
+                model.uploadURLs(urls, to: destination, generation: generation)
+            }
+        }
+        return true
     }
 
     private func pathBar(path: String, input: Binding<String>, edits: Binding<Bool>, isLocal: Bool) -> some View {

@@ -3,6 +3,25 @@ import XCTest
 
 @MainActor
 final class ServerManagerTests: XCTestCase {
+    func testEditorPresentationKeepsExistingServer() {
+        let server = Server(name: "Production", host: "192.0.2.10", user: "deploy", credentialID: UUID())
+        let presentation = ServerEditorPresentation(server: server)
+
+        XCTAssertEqual(presentation.server, server)
+        XCTAssertNotEqual(presentation.id, ServerEditorPresentation(server: server).id)
+    }
+
+    func testNewEditorPresentationDoesNotReuseEditedServer() {
+        var presentation = ServerEditorPresentation(
+            server: Server(name: "Production", host: "192.0.2.10", user: "deploy", credentialID: UUID())
+        )
+        let previousID = presentation.id
+        presentation = ServerEditorPresentation()
+
+        XCTAssertNil(presentation.server)
+        XCTAssertNotEqual(presentation.id, previousID)
+    }
+
     func testEmptyPasswordCanBeSavedUpdatedAndDuplicated() throws {
         let fileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("inchspace-empty-password-\(UUID().uuidString).json")

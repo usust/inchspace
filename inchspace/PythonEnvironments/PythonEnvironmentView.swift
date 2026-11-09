@@ -29,7 +29,7 @@ struct PythonEnvironmentView: View {
     var body: some View {
         GeometryReader { page in
             pageContent
-                .frame(width: page.size.width, height: page.size.height)
+                .frame(width: page.size.width, height: page.size.height, alignment: .top)
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear { if selection == nil { selection = store.environments.first?.id } }
@@ -91,6 +91,7 @@ struct PythonEnvironmentView: View {
                 } actions: {
                     Button("添加已有环境") { editor = .add }.buttonStyle(.borderedProminent)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 PythonEnvironmentColumns {
                     environmentList

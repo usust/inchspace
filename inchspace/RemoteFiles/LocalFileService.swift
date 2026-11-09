@@ -20,6 +20,13 @@ struct LocalFileService: Sendable {
             .sorted(by: FileItem.defaultOrder)
     }
 
+    func item(at url: URL) throws -> FileItem {
+        guard url.isFileURL else { throw CocoaError(.fileReadUnsupportedScheme) }
+        let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey])
+        let kind: FileItemKind = values.isSymbolicLink == true ? .symbolicLink : (values.isDirectory == true ? .directory : .file)
+        return FileItem(name: url.lastPathComponent, path: url.path, kind: kind, size: Int64(values.fileSize ?? 0), modifiedAt: values.contentModificationDate)
+    }
+
     func isDirectory(_ path: String) -> Bool {
         var isDirectory = ObjCBool(false)
         return manager.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue

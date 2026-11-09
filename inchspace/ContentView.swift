@@ -13,6 +13,7 @@ struct ContentView: View {
     @ObservedObject private var updateManager: UpdateManager
     @StateObject private var repository: LaunchpadRepository
     @StateObject private var runnerStore: RunnerStore
+    @StateObject private var xenStore = XenStore()
     @StateObject private var serverManager: ServerManager
     @StateObject private var terminalManager: TerminalManager
     @StateObject private var remoteFileModel: RemoteFileViewModel
@@ -50,6 +51,7 @@ struct ContentView: View {
         }
         .onAppear { configureTerminalIntegration() }
         .task { await runnerStore.bootstrap() }
+        .task { await xenStore.restoreConnections() }
         .task { _ = environmentService.reloadEnvironment() }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase != .active { repository.saveImmediately() }
@@ -73,7 +75,7 @@ struct ContentView: View {
         case .pythonEnvironments:
             PythonEnvironmentView(store: pythonEnvironmentStore, terminalManager: terminalManager)
         case .servers:
-            ServerManagerView(manager: serverManager)
+            ServerManagerView(manager: serverManager, xenStore: xenStore)
         case .remoteFiles:
             RemoteFileView(model: remoteFileModel, serverManager: serverManager)
         case .environmentVariables:

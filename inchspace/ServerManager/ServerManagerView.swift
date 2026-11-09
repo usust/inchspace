@@ -2,9 +2,10 @@ import SwiftUI
 
 struct ServerManagerView: View {
     @ObservedObject var manager: ServerManager
+    @ObservedObject var xenStore: XenStore
 
     var body: some View {
-        ServerDashboardView(manager: manager)
+        ServerDashboardView(manager: manager, xenStore: xenStore)
     }
 }
 
@@ -271,7 +272,7 @@ extension View {
 #if DEBUG
 struct ServerManagerView_Previews: PreviewProvider {
     static var previews: some View {
-        ServerManagerView(manager: ServerManager()).frame(width: 1200, height: 800)
+        ServerManagerView(manager: ServerManager(), xenStore: XenStore()).frame(width: 1200, height: 800)
     }
 }
 #endif

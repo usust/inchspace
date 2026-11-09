@@ -236,7 +236,10 @@ xcodebuild test \
   -destination 'platform=macOS' \
   -clonedSourcePackagesDirPath "$source_packages" \
   -derivedDataPath "$test_derived_data" \
-  CODE_SIGNING_ALLOWED=NO \
+  CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY=- \
+  DEVELOPMENT_TEAM= \
+  CODE_SIGNING_ALLOWED=YES \
   MARKETING_VERSION="$version" \
   CURRENT_PROJECT_VERSION="$build_number" \
   SPARKLE_PUBLIC_ED_KEY="$sparkle_public_key"
